@@ -8,8 +8,19 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDate
 
-class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", null, 6) {
+class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", null, 7) {
     override fun onCreate(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE tags (
+                name TEXT PRIMARY KEY,
+                color_hex TEXT NOT NULL DEFAULT '#F4F1FF',
+                priority INTEGER NOT NULL DEFAULT 3,
+                schedule TEXT NOT NULL DEFAULT 'manual',
+                weekly_day INTEGER NOT NULL DEFAULT 1
+            )
+            """.trimIndent()
+        )
         db.execSQL(
             """
             CREATE TABLE items (
@@ -51,8 +62,7 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
             )
             """.trimIndent()
         )
-
-        seed(db)
+        seedTags(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -80,6 +90,31 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
             db.execSQL("ALTER TABLE items ADD COLUMN priority INTEGER NOT NULL DEFAULT 3")
             db.execSQL("ALTER TABLE daily_entries ADD COLUMN color_hex TEXT NOT NULL DEFAULT '#F4F1FF'")
             db.execSQL("ALTER TABLE daily_entries ADD COLUMN priority INTEGER NOT NULL DEFAULT 3")
+        }
+        if (oldVersion < 7) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS tags (
+                    name TEXT PRIMARY KEY,
+                    color_hex TEXT NOT NULL DEFAULT '#F4F1FF',
+                    priority INTEGER NOT NULL DEFAULT 3,
+                    schedule TEXT NOT NULL DEFAULT 'manual',
+                    weekly_day INTEGER NOT NULL DEFAULT 1
+                )
+                """.trimIndent()
+            )
+            seedTags(db)
+            db.rawQuery("SELECT DISTINCT tag, color_hex, priority FROM items", null).use { cursor ->
+                while (cursor.moveToNext()) {
+                    db.insertWithOnConflict("tags", null, ContentValues().apply {
+                        put("name", cursor.getString(0).cleanTag())
+                        put("color_hex", cursor.getString(1).cleanColorHex())
+                        put("priority", cursor.getInt(2).coerceIn(1, 5))
+                        put("schedule", inferSchedule(cursor.getString(0)).dbValue)
+                        put("weekly_day", 1)
+                    }, SQLiteDatabase.CONFLICT_IGNORE)
+                }
+            }
         }
     }
 
@@ -111,6 +146,52 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                 )
             }
         }
+    }
+
+    fun tags(): List<TrainingTag> = readableDatabase.query(
+        "tags",
+        arrayOf("name", "color_hex", "priority", "schedule", "weekly_day"),
+        null,
+        null,
+        null,
+        null,
+        "priority ASC, name ASC"
+    ).use { cursor ->
+        buildList {
+            while (cursor.moveToNext()) {
+                add(
+                    TrainingTag(
+                        name = cursor.getString(0),
+                        colorHex = cursor.getString(1),
+                        priority = cursor.getInt(2),
+                        schedule = cursor.getString(3).toTagSchedule(),
+                        weeklyDay = cursor.getInt(4).coerceIn(1, 7)
+                    )
+                )
+            }
+        }
+    }
+
+    fun saveTag(originalName: String?, tag: TrainingTag) {
+        val cleanName = tag.name.cleanTag()
+        writableDatabase.insertWithOnConflict("tags", null, ContentValues().apply {
+            put("name", cleanName)
+            put("color_hex", tag.colorHex.cleanColorHex())
+            put("priority", tag.priority.coerceIn(1, 5))
+            put("schedule", tag.schedule.dbValue)
+            put("weekly_day", tag.weeklyDay.coerceIn(1, 7))
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+        if (originalName != null && originalName != cleanName) {
+            writableDatabase.update("items", ContentValues().apply { put("tag", cleanName) }, "tag = ?", arrayOf(originalName))
+            writableDatabase.update("daily_entries", ContentValues().apply { put("tag", cleanName) }, "tag = ?", arrayOf(originalName))
+            writableDatabase.delete("tags", "name = ?", arrayOf(originalName))
+        }
+    }
+
+    fun deleteTag(name: String) {
+        writableDatabase.update("items", ContentValues().apply { put("tag", "手動訓練") }, "tag = ?", arrayOf(name))
+        writableDatabase.update("daily_entries", ContentValues().apply { put("tag", "手動訓練") }, "tag = ?", arrayOf(name))
+        writableDatabase.delete("tags", "name = ?", arrayOf(name))
     }
 
     fun saveItem(id: Long?, title: String, tag: String, colorHex: String, priority: Int, mode: TrainingMode, durationSeconds: Int, repsPerSet: Int, sets: Int, restSeconds: Int) {
@@ -163,7 +244,11 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
 
     fun ensureEntriesFor(date: String = LocalDate.now().toString()) {
         val db = writableDatabase
+        val targetDate = LocalDate.parse(date)
+        val tagRules = tags().associateBy { it.name }
         activeItems().forEach { item ->
+            val tag = tagRules[item.tag] ?: TrainingTag(item.tag, item.colorHex, item.priority, inferSchedule(item.tag))
+            if (!tag.shouldAppearOn(targetDate)) return@forEach
             val values = ContentValues().apply {
                 put("date", date)
                 put("item_id", item.id)
@@ -299,27 +384,20 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
         }
     }
 
-    private fun seed(db: SQLiteDatabase) {
+    private fun seedTags(db: SQLiteDatabase) {
         listOf(
-            TrainingItem(0, "運球手感", "每日訓練", "#F4F1FF", 1, TrainingMode.Time, 600, 10, 4, 45),
-            TrainingItem(0, "定點投籃", "每日訓練", "#EAF7EE", 1, TrainingMode.Reps, 60, 20, 5, 60),
-            TrainingItem(0, "上籃腳步", "每周訓練", "#FFF3D8", 2, TrainingMode.Reps, 60, 12, 4, 45),
-            TrainingItem(0, "罰球", "每日訓練", "#EAF3FF", 2, TrainingMode.Reps, 60, 10, 3, 30),
-            TrainingItem(0, "核心與伸展", "特化訓練", "#FCECEC", 3, TrainingMode.Time, 600, 10, 3, 60)
-        ).forEachIndexed { index, item ->
-            db.insert("items", null, ContentValues().apply {
-                put("title", item.title)
-                put("tag", item.tag)
-                put("color_hex", item.colorHex)
-                put("priority", item.priority)
-                put("mode", item.mode.dbValue)
-                put("duration_seconds", item.durationSeconds)
-                put("reps_per_set", item.repsPerSet)
-                put("sets", item.sets)
-                put("rest_seconds", item.restSeconds)
-                put("active", 1)
-                put("sort_order", index)
-            })
+            TrainingTag("每日訓練", "#F4F1FF", 1, TagSchedule.Daily, 1),
+            TrainingTag("每周訓練", "#FFF3D8", 2, TagSchedule.Weekly, 1),
+            TrainingTag("特化訓練", "#FCECEC", 3, TagSchedule.Manual, 1),
+            TrainingTag("手動訓練", "#F2F2F2", 5, TagSchedule.Manual, 1)
+        ).forEach { tag ->
+            db.insertWithOnConflict("tags", null, ContentValues().apply {
+                put("name", tag.name)
+                put("color_hex", tag.colorHex)
+                put("priority", tag.priority)
+                put("schedule", tag.schedule.dbValue)
+                put("weekly_day", tag.weeklyDay)
+            }, SQLiteDatabase.CONFLICT_IGNORE)
         }
     }
 }
@@ -333,6 +411,31 @@ private val TrainingMode.dbValue: String
 private fun String.toTrainingMode(): TrainingMode = when (this) {
     "reps" -> TrainingMode.Reps
     else -> TrainingMode.Time
+}
+
+private val TagSchedule.dbValue: String
+    get() = when (this) {
+        TagSchedule.Daily -> "daily"
+        TagSchedule.Weekly -> "weekly"
+        TagSchedule.Manual -> "manual"
+    }
+
+private fun String.toTagSchedule(): TagSchedule = when (this) {
+    "daily" -> TagSchedule.Daily
+    "weekly" -> TagSchedule.Weekly
+    else -> TagSchedule.Manual
+}
+
+private fun inferSchedule(tag: String): TagSchedule = when {
+    tag.contains("每日") -> TagSchedule.Daily
+    tag.contains("每周") || tag.contains("每週") -> TagSchedule.Weekly
+    else -> TagSchedule.Manual
+}
+
+private fun TrainingTag.shouldAppearOn(date: LocalDate): Boolean = when (schedule) {
+    TagSchedule.Daily -> true
+    TagSchedule.Weekly -> date.dayOfWeek.value == weeklyDay.coerceIn(1, 7)
+    TagSchedule.Manual -> false
 }
 
 private fun parseSetPlans(

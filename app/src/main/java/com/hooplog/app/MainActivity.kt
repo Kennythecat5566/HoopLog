@@ -60,6 +60,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -83,6 +84,8 @@ data class UiState(
     val summaries: List<DaySummary> = emptyList(),
     val selectedHistory: String? = null,
     val historyEntries: List<DailyEntry> = emptyList(),
+    val tags: List<TrainingTag> = emptyList(),
+    val uiSettings: UiSettings = UiSettings(),
     val updateSettings: UpdateSettings = UpdateSettings(),
     val updateInfo: UpdateInfo? = null,
     val message: String? = null
@@ -110,6 +113,8 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
             items = trainingStore.activeItems(),
             summaries = trainingStore.summaries(),
             historyEntries = selected?.let { trainingStore.entriesFor(it, ensure = false) } ?: emptyList(),
+            tags = trainingStore.tags(),
+            uiSettings = settingsStore.loadUiSettings(),
             updateSettings = settingsStore.loadUpdateSettings()
         )
     }
@@ -147,6 +152,21 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
         reload()
     }
 
+    fun saveTag(originalName: String?, tag: TrainingTag) {
+        trainingStore.saveTag(originalName, tag)
+        reload()
+    }
+
+    fun deleteTag(name: String) {
+        trainingStore.deleteTag(name)
+        reload()
+    }
+
+    fun saveUiSettings(settings: UiSettings) {
+        settingsStore.saveUiSettings(settings)
+        reload()
+    }
+
     fun selectHistory(date: String) {
         state = state.copy(selectedHistory = date, historyEntries = trainingStore.entriesFor(date, ensure = false))
     }
@@ -178,11 +198,25 @@ enum class Screen { Today, History, Settings }
 
 @Composable
 fun HoopLogApp(vm: HoopLogViewModel = viewModel()) {
+    val ui = vm.state.uiSettings
     MaterialTheme(
         colorScheme = MaterialTheme.colorScheme.copy(
-            primary = androidx.compose.ui.graphics.Color(0xFF111111),
+            primary = parseColor(ui.primaryColorHex, Color(0xFF111111)),
             background = androidx.compose.ui.graphics.Color(0xFFFAFAFA),
-            surface = androidx.compose.ui.graphics.Color.White
+            surface = parseColor(ui.surfaceColorHex, Color.White)
+        ),
+        typography = MaterialTheme.typography.copy(
+            bodySmall = MaterialTheme.typography.bodySmall.copy(fontSize = (12 * ui.fontScale).sp),
+            bodyMedium = MaterialTheme.typography.bodyMedium.copy(fontSize = (14 * ui.fontScale).sp),
+            titleMedium = MaterialTheme.typography.titleMedium.copy(fontSize = (16 * ui.fontScale).sp),
+            titleLarge = MaterialTheme.typography.titleLarge.copy(fontSize = (22 * ui.fontScale).sp),
+            displaySmall = MaterialTheme.typography.displaySmall.copy(fontSize = (36 * ui.fontScale).sp),
+            displayMedium = MaterialTheme.typography.displayMedium.copy(fontSize = (45 * ui.fontScale).sp)
+        ),
+        shapes = MaterialTheme.shapes.copy(
+            small = RoundedCornerShape(ui.cardRadius.dp),
+            medium = RoundedCornerShape(ui.cardRadius.dp),
+            large = RoundedCornerShape((ui.cardRadius + 4).dp)
         )
     ) {
         var screen by remember { mutableStateOf(Screen.Today) }
@@ -223,6 +257,7 @@ fun HoopLogApp(vm: HoopLogViewModel = viewModel()) {
                     if (showDialog) {
                         ItemDialog(
                             item = editing,
+                            availableTags = vm.state.tags,
                             onDismiss = { showDialog = false },
                             onSave = { title, tag, color, priority, mode, duration, reps, sets, rest ->
                                 vm.saveItem(editing?.id, title, tag, color, priority, mode, duration, reps, sets, rest)
@@ -335,6 +370,7 @@ private fun TodayScreen(
     editing?.let { item ->
         ItemDialog(
             item = item,
+            availableTags = state.tags,
             onDismiss = { editing = null },
             onSave = { title, tag, color, priority, mode, duration, reps, sets, rest ->
                 onSaveItem(item.id, title, tag, color, priority, mode, duration, reps, sets, rest)
@@ -361,7 +397,7 @@ private fun TrainingRow(
         Surface(
             tonalElevation = 1.dp,
             color = parseColor(colorHex, MaterialTheme.colorScheme.surface),
-            shape = RoundedCornerShape(8.dp),
+            shape = MaterialTheme.shapes.small,
             modifier = Modifier
                 .fillMaxWidth()
                 .combinedClickable(
@@ -394,6 +430,7 @@ private fun TrainingRow(
 @Composable
 private fun HistoryScreen(state: UiState, onSelect: (String) -> Unit) {
     var month by remember { mutableStateOf(YearMonth.now()) }
+    var detailDate by remember { mutableStateOf<String?>(null) }
     val summaries = remember(state.summaries) { state.summaries.associateBy { it.date } }
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -401,12 +438,45 @@ private fun HistoryScreen(state: UiState, onSelect: (String) -> Unit) {
             Text("${month.year}-${month.monthValue.toString().padStart(2, '0')}", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
             TextButton(onClick = { month = month.plusMonths(1) }) { Text(">") }
         }
-        CalendarMonth(month, summaries, onSelect)
-        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            item {
-                Text(state.selectedHistory ?: "選擇日期", style = MaterialTheme.typography.titleMedium)
+        CalendarMonth(month, summaries) { date ->
+            onSelect(date)
+            detailDate = date
+        }
+        Spacer(Modifier.weight(1f))
+    }
+    detailDate?.let { date ->
+        AlertDialog(
+            onDismissRequest = { detailDate = null },
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+            title = { Text(date) },
+            text = {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(state.historyEntries, key = { it.id }) { entry ->
+                        TrainingRow(
+                            title = entry.title,
+                            detail = "${entry.completedSets}/${entry.sets} 組 · ${entry.planDetail()}",
+                            colorHex = entry.colorHex,
+                            checked = entry.completed,
+                            onChecked = {},
+                            onClick = {}
+                        )
+                    }
+                    if (state.historyEntries.isEmpty()) {
+                        item { Text("這天沒有訓練紀錄") }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { detailDate = null }) { Text("關閉") }
             }
-            items(state.historyEntries, key = { it.id }) { entry ->
+        )
+    }
+}
+
+@Composable
+private fun HistoryDetailList(entries: List<DailyEntry>) {
+    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(entries, key = { it.id }) { entry ->
                 TrainingRow(
                     title = entry.title,
                     detail = "${entry.completedSets}/${entry.sets} 組 · ${entry.planDetail()}",
@@ -415,7 +485,6 @@ private fun HistoryScreen(state: UiState, onSelect: (String) -> Unit) {
                     onChecked = {},
                     onClick = {}
                 )
-            }
         }
     }
 }
@@ -441,7 +510,7 @@ private fun CalendarMonth(
                     val summary = date?.let { summaries[it.toString()] }
                     Surface(
                         tonalElevation = if (summary == null) 0.dp else 1.dp,
-                        shape = RoundedCornerShape(8.dp),
+                        shape = MaterialTheme.shapes.small,
                         color = if (summary == null) MaterialTheme.colorScheme.surface else Color(0xFFEAF7EE),
                         modifier = Modifier
                             .weight(1f)
@@ -466,15 +535,17 @@ private fun CalendarMonth(
 private fun SettingsScreen(vm: HoopLogViewModel) {
     var editItem by remember { mutableStateOf<TrainingItem?>(null) }
     var showDialog by remember { mutableStateOf(false) }
+    var editTag by remember { mutableStateOf<TrainingTag?>(null) }
+    var showTagDialog by remember { mutableStateOf(false) }
+    var showAdvancedDialog by remember { mutableStateOf(false) }
     var owner by remember(vm.state.updateSettings) { mutableStateOf(vm.state.updateSettings.owner) }
     var repo by remember(vm.state.updateSettings) { mutableStateOf(vm.state.updateSettings.repo) }
     var checking by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        Text("訓練項目", style = MaterialTheme.typography.titleLarge)
-        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(vm.state.items, key = { it.id }) { item ->
+    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item { Text("訓練項目", style = MaterialTheme.typography.titleLarge) }
+        items(vm.state.items, key = { it.id }) { item ->
                 EditableItemRow(
                     item = item,
                     onEdit = {
@@ -483,30 +554,59 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
                     },
                     onDelete = { vm.archiveItem(item.id) }
                 )
+        }
+        item { Text("標籤管理", style = MaterialTheme.typography.titleLarge) }
+        items(vm.state.tags, key = { it.name }) { tag ->
+            Surface(
+                color = parseColor(tag.colorHex, MaterialTheme.colorScheme.surface),
+                shape = MaterialTheme.shapes.small,
+                tonalElevation = 1.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tag.name, style = MaterialTheme.typography.titleMedium)
+                        Text("${tag.schedule.label()} · priority ${tag.priority} · ${weekdayLabel(tag.weeklyDay)}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    IconButton(onClick = {
+                        editTag = tag
+                        showTagDialog = true
+                    }) {
+                        Icon(Icons.Outlined.Edit, contentDescription = "修改")
+                    }
+                    IconButton(onClick = { vm.deleteTag(tag.name) }) {
+                        Icon(Icons.Outlined.Delete, contentDescription = "刪除")
+                    }
+                }
             }
         }
-
-        Text("GitHub 更新", style = MaterialTheme.typography.titleLarge)
-        OutlinedTextField(owner, { owner = it }, label = { Text("Owner") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(repo, { repo = it }, label = { Text("Repo") }, modifier = Modifier.fillMaxWidth())
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { vm.saveUpdateSettings(owner, repo) }) {
-                Text("儲存")
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = {
+                    editTag = null
+                    showTagDialog = true
+                }) { Text("新增標籤") }
+                Button(onClick = { showAdvancedDialog = true }) { Text("進階設定") }
             }
-            Button(
-                enabled = !checking,
-                onClick = {
-                    checking = true
+        }
+        item { Text("GitHub 更新", style = MaterialTheme.typography.titleLarge) }
+        item { OutlinedTextField(owner, { owner = it }, label = { Text("Owner") }, modifier = Modifier.fillMaxWidth()) }
+        item { OutlinedTextField(repo, { repo = it }, label = { Text("Repo") }, modifier = Modifier.fillMaxWidth()) }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { vm.saveUpdateSettings(owner, repo) }) { Text("儲存") }
+                Button(enabled = !checking, onClick = { checking = true }) {
+                    Icon(Icons.Outlined.Refresh, contentDescription = null)
+                    Text("檢查")
                 }
-            ) {
-                Icon(Icons.Outlined.Refresh, contentDescription = null)
-                Text("檢查")
             }
         }
         vm.state.updateInfo?.let { info ->
-            Text("最新版本：${info.latestVersion}")
-            Button(onClick = { UpdateChecker().openRelease(context, info.releaseUrl) }) {
-                Text(if (info.isNewer) "開啟下載頁" else "檢視 Release")
+            item {
+                Text("最新版本：${info.latestVersion}")
+                Button(onClick = { UpdateChecker().openRelease(context, info.releaseUrl) }) {
+                    Text(if (info.isNewer) "開啟下載頁" else "檢視 Release")
+                }
             }
         }
     }
@@ -521,10 +621,31 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
     if (showDialog) {
         ItemDialog(
             item = editItem,
+            availableTags = vm.state.tags,
             onDismiss = { showDialog = false },
             onSave = { title, tag, color, priority, mode, duration, reps, sets, rest ->
                 vm.saveItem(editItem?.id, title, tag, color, priority, mode, duration, reps, sets, rest)
                 showDialog = false
+            }
+        )
+    }
+    if (showTagDialog) {
+        TagDialog(
+            tag = editTag,
+            onDismiss = { showTagDialog = false },
+            onSave = { tag ->
+                vm.saveTag(editTag?.name, tag)
+                showTagDialog = false
+            }
+        )
+    }
+    if (showAdvancedDialog) {
+        AdvancedSettingsDialog(
+            settings = vm.state.uiSettings,
+            onDismiss = { showAdvancedDialog = false },
+            onSave = {
+                vm.saveUiSettings(it)
+                showAdvancedDialog = false
             }
         )
     }
@@ -542,7 +663,7 @@ private fun EditableItemRow(
         Surface(
             tonalElevation = 1.dp,
             color = parseColor(item.colorHex, MaterialTheme.colorScheme.surface),
-            shape = RoundedCornerShape(8.dp),
+            shape = MaterialTheme.shapes.small,
             modifier = Modifier
                 .fillMaxWidth()
                 .combinedClickable(
@@ -568,8 +689,133 @@ private fun EditableItemRow(
 }
 
 @Composable
+private fun TagDialog(
+    tag: TrainingTag?,
+    onDismiss: () -> Unit,
+    onSave: (TrainingTag) -> Unit
+) {
+    var name by remember(tag) { mutableStateOf(tag?.name ?: "") }
+    var colorHex by remember(tag) { mutableStateOf(tag?.colorHex ?: "#F4F1FF") }
+    var priority by remember(tag) { mutableStateOf((tag?.priority ?: 3).toString()) }
+    var schedule by remember(tag) { mutableStateOf(tag?.schedule ?: TagSchedule.Manual) }
+    var weeklyDay by remember(tag) { mutableStateOf(tag?.weeklyDay ?: 1) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (tag == null) "新增標籤" else "修改標籤") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(name, { name = it }, label = { Text("標籤名稱") }, singleLine = true)
+                Text("顏色", style = MaterialTheme.typography.bodySmall)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(cardColorChoices, key = { it }) { color ->
+                        ColorChoice(color, colorHex == color) { colorHex = color }
+                    }
+                }
+                OutlinedTextField(
+                    value = priority,
+                    onValueChange = { priority = it.filter(Char::isDigit).take(1) },
+                    label = { Text("Priority 1-5") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ChoiceButton("每日", schedule == TagSchedule.Daily) { schedule = TagSchedule.Daily }
+                    ChoiceButton("每周", schedule == TagSchedule.Weekly) { schedule = TagSchedule.Weekly }
+                    ChoiceButton("手動", schedule == TagSchedule.Manual) { schedule = TagSchedule.Manual }
+                }
+                if (schedule == TagSchedule.Weekly) {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items((1..7).toList(), key = { it }) { day ->
+                            ChoiceButton(weekdayLabel(day), weeklyDay == day, compact = true) { weeklyDay = day }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onSave(
+                    TrainingTag(
+                        name = name.trim().ifBlank { "未命名標籤" },
+                        colorHex = colorHex,
+                        priority = priority.toIntOrNull()?.coerceIn(1, 5) ?: 3,
+                        schedule = schedule,
+                        weeklyDay = weeklyDay
+                    )
+                )
+            }) { Text("儲存") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}
+
+@Composable
+private fun AdvancedSettingsDialog(
+    settings: UiSettings,
+    onDismiss: () -> Unit,
+    onSave: (UiSettings) -> Unit
+) {
+    var primary by remember(settings) { mutableStateOf(settings.primaryColorHex) }
+    var surface by remember(settings) { mutableStateOf(settings.surfaceColorHex) }
+    var radius by remember(settings) { mutableStateOf(settings.cardRadius.toString()) }
+    var fontScale by remember(settings) { mutableStateOf(((settings.fontScale * 100).toInt()).toString()) }
+    var densityScale by remember(settings) { mutableStateOf(((settings.densityScale * 100).toInt()).toString()) }
+    var style by remember(settings) { mutableStateOf(settings.style) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("進階介面設定") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("介面風格", style = MaterialTheme.typography.bodySmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ChoiceButton("Minimal", style == "Minimal") { style = "Minimal" }
+                    ChoiceButton("Soft", style == "Soft") { style = "Soft" }
+                }
+                Text("主色", style = MaterialTheme.typography.bodySmall)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(listOf("#111111", "#2563EB", "#047857", "#7C3AED", "#B45309"), key = { it }) { color ->
+                        ColorChoice(color, primary == color) { primary = color }
+                    }
+                }
+                Text("介面底色", style = MaterialTheme.typography.bodySmall)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(listOf("#FFFFFF", "#FAFAFA", "#F7F7F2", "#F8FAFC"), key = { it }) { color ->
+                        ColorChoice(color, surface == color) { surface = color }
+                    }
+                }
+                OutlinedTextField(radius, { radius = it.filter(Char::isDigit).take(2) }, label = { Text("卡片弧度 0-16") }, singleLine = true)
+                OutlinedTextField(fontScale, { fontScale = it.filter(Char::isDigit).take(3) }, label = { Text("字體大小 %") }, singleLine = true)
+                OutlinedTextField(densityScale, { densityScale = it.filter(Char::isDigit).take(3) }, label = { Text("介面大小 %") }, singleLine = true)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onSave(
+                    UiSettings(
+                        primaryColorHex = primary,
+                        surfaceColorHex = surface,
+                        cardRadius = radius.toIntOrNull()?.coerceIn(0, 16) ?: 8,
+                        fontScale = ((fontScale.toIntOrNull() ?: 100) / 100f).coerceIn(0.85f, 1.25f),
+                        densityScale = ((densityScale.toIntOrNull() ?: 100) / 100f).coerceIn(0.85f, 1.2f),
+                        style = style
+                    )
+                )
+            }) { Text("套用") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}
+
+@Composable
 private fun ItemDialog(
     item: TrainingItem?,
+    availableTags: List<TrainingTag>,
     onDismiss: () -> Unit,
     onSave: (String, String, String, Int, TrainingMode, Int, Int, Int, Int) -> Unit
 ) {
@@ -591,12 +837,16 @@ private fun ItemDialog(
                 OutlinedTextField(title, { title = it }, label = { Text("名稱") }, singleLine = true)
                 OutlinedTextField(tag, { tag = it }, label = { Text("標籤") }, singleLine = true)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(listOf("每日訓練", "每周訓練", "特化訓練"), key = { it }) { preset ->
+                    items(availableTags, key = { it.name }) { preset ->
                         ChoiceButton(
-                            text = preset,
-                            selected = tag == preset,
+                            text = preset.name,
+                            selected = tag == preset.name,
                             compact = true,
-                            onClick = { tag = preset }
+                            onClick = {
+                                tag = preset.name
+                                colorHex = preset.colorHex
+                                priority = preset.priority.toString()
+                            }
                         )
                     }
                 }
@@ -937,7 +1187,7 @@ private fun SetCard(
     onStartPause: () -> Unit,
     onComplete: () -> Unit
 ) {
-    Surface(tonalElevation = 1.dp, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
+    Surface(tonalElevation = 1.dp, shape = MaterialTheme.shapes.small, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -1035,7 +1285,7 @@ private fun ChoiceButton(
 ) {
     Button(
         onClick = onClick,
-        shape = RoundedCornerShape(8.dp),
+        shape = MaterialTheme.shapes.small,
         colors = ButtonDefaults.buttonColors(
             containerColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
             contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
@@ -1053,7 +1303,7 @@ private fun ColorChoice(
 ) {
     Button(
         onClick = onClick,
-        shape = RoundedCornerShape(8.dp),
+        shape = MaterialTheme.shapes.small,
         colors = ButtonDefaults.buttonColors(
             containerColor = parseColor(colorHex, MaterialTheme.colorScheme.surface),
             contentColor = Color(0xFF111111)
@@ -1088,6 +1338,22 @@ private fun parseColor(value: String, fallback: Color): Color =
             blue = clean.substring(4, 6).toInt(16)
         )
     }.getOrElse { fallback }
+
+private fun TagSchedule.label(): String = when (this) {
+    TagSchedule.Daily -> "每日"
+    TagSchedule.Weekly -> "每周"
+    TagSchedule.Manual -> "手動"
+}
+
+private fun weekdayLabel(day: Int): String = when (day.coerceIn(1, 7)) {
+    1 -> "週一"
+    2 -> "週二"
+    3 -> "週三"
+    4 -> "週四"
+    5 -> "週五"
+    6 -> "週六"
+    else -> "週日"
+}
 
 private fun DailyEntry.planDetail(): String = when (mode) {
     TrainingMode.Time -> "$tag · 計時 · 每組 ${formatDuration(durationSeconds)} · ${sets} 組 · 休息 ${restSeconds} 秒"

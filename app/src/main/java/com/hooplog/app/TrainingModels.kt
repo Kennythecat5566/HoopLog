@@ -5,6 +5,20 @@ enum class TrainingMode {
     Reps
 }
 
+enum class TagSchedule {
+    Daily,
+    Weekly,
+    Manual
+}
+
+data class TrainingTag(
+    val name: String,
+    val colorHex: String,
+    val priority: Int,
+    val schedule: TagSchedule,
+    val weeklyDay: Int = 1
+)
+
 data class TrainingItem(
     val id: Long,
     val title: String,
@@ -65,4 +79,13 @@ data class UpdateInfo(
     val latestVersion: String,
     val releaseUrl: String,
     val isNewer: Boolean
+)
+
+data class UiSettings(
+    val primaryColorHex: String = "#111111",
+    val surfaceColorHex: String = "#FFFFFF",
+    val cardRadius: Int = 8,
+    val fontScale: Float = 1.0f,
+    val densityScale: Float = 1.0f,
+    val style: String = "Minimal"
 )
