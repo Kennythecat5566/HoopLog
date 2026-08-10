@@ -351,6 +351,9 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
         }
     }
 
+    fun historyEntriesFor(date: String): List<DailyEntry> =
+        entriesFor(date, ensure = false).filter { it.completed || it.completedSets > 0 }
+
     fun toggleEntry(id: Long, completed: Boolean) {
         val row = readableDatabase.rawQuery(
             "SELECT mode, duration_seconds, reps_per_set, sets, set_plans FROM daily_entries WHERE id = ?",
@@ -468,6 +471,7 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
         SELECT d.date, SUM(d.completed), COUNT(*), COALESCE(s.duration_seconds, 0)
         FROM daily_entries d
         LEFT JOIN day_sessions s ON s.date = d.date
+        WHERE d.completed = 1 OR d.completed_sets > 0
         GROUP BY d.date, s.duration_seconds
         ORDER BY d.date DESC
         """.trimIndent(),

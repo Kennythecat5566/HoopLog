@@ -138,7 +138,7 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
             items = trainingStore.activeItems(),
             summaries = trainingStore.summaries(),
             todaySession = trainingStore.sessionFor(today),
-            historyEntries = selected?.let { trainingStore.entriesFor(it, ensure = false) } ?: emptyList(),
+            historyEntries = selected?.let { trainingStore.historyEntriesFor(it) } ?: emptyList(),
             tags = trainingStore.tags(),
             uiSettings = settingsStore.loadUiSettings(),
             updateSettings = settingsStore.loadUpdateSettings()
@@ -199,7 +199,7 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun selectHistory(date: String) {
-        state = state.copy(selectedHistory = date, historyEntries = trainingStore.entriesFor(date, ensure = false))
+        state = state.copy(selectedHistory = date, historyEntries = trainingStore.historyEntriesFor(date))
     }
 
     fun saveUpdateSettings(owner: String, repo: String) {
