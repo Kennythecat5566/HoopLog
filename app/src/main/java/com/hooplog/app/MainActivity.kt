@@ -16,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -834,7 +835,7 @@ private fun TagDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (tag == null) "新增標籤" else "修改標籤") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            ScrollableDialogContent {
                 OutlinedTextField(name, { name = it }, label = { Text("標籤名稱") }, singleLine = true)
                 ColorPicker(label = "顏色", colorHex = colorHex, onColorChange = { colorHex = it })
                 OutlinedTextField(
@@ -844,10 +845,10 @@ private fun TagDialog(
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ChoiceButton("每日", schedule == TagSchedule.Daily) { schedule = TagSchedule.Daily }
-                    ChoiceButton("每周", schedule == TagSchedule.Weekly) { schedule = TagSchedule.Weekly }
-                    ChoiceButton("手動", schedule == TagSchedule.Manual) { schedule = TagSchedule.Manual }
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item { ChoiceButton("每日", schedule == TagSchedule.Daily) { schedule = TagSchedule.Daily } }
+                    item { ChoiceButton("每周", schedule == TagSchedule.Weekly) { schedule = TagSchedule.Weekly } }
+                    item { ChoiceButton("手動", schedule == TagSchedule.Manual) { schedule = TagSchedule.Manual } }
                 }
                 if (schedule == TagSchedule.Weekly) {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -894,7 +895,7 @@ private fun AdvancedSettingsDialog(
         onDismissRequest = onDismiss,
         title = { Text("進階介面設定") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            ScrollableDialogContent {
                 Text("介面風格", style = MaterialTheme.typography.bodySmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ChoiceButton("Minimal", style == "Minimal") { style = "Minimal" }
@@ -950,7 +951,7 @@ private fun ItemDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (item == null) "新增項目" else "修改項目") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            ScrollableDialogContent {
                 OutlinedTextField(title, { title = it }, label = { Text("名稱") }, singleLine = true)
                 OutlinedTextField(tag, { tag = it }, label = { Text("標籤") }, singleLine = true)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -975,9 +976,9 @@ private fun ItemDialog(
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ChoiceButton("計時", mode == TrainingMode.Time) { mode = TrainingMode.Time }
-                    ChoiceButton("次數", mode == TrainingMode.Reps) { mode = TrainingMode.Reps }
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item { ChoiceButton("計時", mode == TrainingMode.Time) { mode = TrainingMode.Time } }
+                    item { ChoiceButton("次數", mode == TrainingMode.Reps) { mode = TrainingMode.Reps } }
                 }
                 if (mode == TrainingMode.Time) {
                     OutlinedTextField(
@@ -1458,6 +1459,18 @@ private fun ColorChoice(
 }
 
 @Composable
+private fun ScrollableDialogContent(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 560.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        content = content
+    )
+}
+
+@Composable
 private fun ColorPicker(
     label: String,
     colorHex: String,
@@ -1518,7 +1531,7 @@ private fun ColorWheel(
     Canvas(
         modifier = Modifier
             .fillMaxWidth()
-            .height(240.dp)
+            .height(220.dp)
             .pointerInput(hue, saturation, value) {
                 detectTapGestures { offset ->
                     val center = Offset(size.width / 2f, size.height / 2f)
@@ -1577,10 +1590,10 @@ private fun ColorWheel(
             radius = innerRadius,
             center = center
         )
-        drawCircle(color = Color.White, radius = 9.dp.toPx(), center = hueMarker, style = Stroke(width = 2.dp.toPx()))
-        drawCircle(color = HsvColor(hue, saturation, value).toComposeColor(), radius = 13.dp.toPx(), center = hueMarker)
-        drawCircle(color = Color.White, radius = 8.dp.toPx(), center = toneMarker, style = Stroke(width = 2.dp.toPx()))
-        drawCircle(color = Color(0x66000000), radius = 10.dp.toPx(), center = toneMarker, style = Stroke(width = 1.dp.toPx()))
+        drawCircle(color = Color.White, radius = 8.dp.toPx(), center = hueMarker, style = Stroke(width = 2.dp.toPx()))
+        drawCircle(color = HsvColor(hue, saturation, value).toComposeColor(), radius = 11.dp.toPx(), center = hueMarker)
+        drawCircle(color = Color.White, radius = 7.dp.toPx(), center = toneMarker, style = Stroke(width = 2.dp.toPx()))
+        drawCircle(color = Color(0x66000000), radius = 9.dp.toPx(), center = toneMarker, style = Stroke(width = 1.dp.toPx()))
     }
 }
 
