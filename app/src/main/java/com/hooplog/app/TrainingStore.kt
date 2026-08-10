@@ -6,14 +6,16 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import java.time.LocalDate
 
-class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", null, 2) {
+class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", null, 3) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
             CREATE TABLE items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'time',
                 duration_seconds INTEGER NOT NULL DEFAULT 600,
+                reps_per_set INTEGER NOT NULL DEFAULT 10,
                 sets INTEGER NOT NULL,
                 rest_seconds INTEGER NOT NULL,
                 active INTEGER NOT NULL DEFAULT 1,
@@ -28,9 +30,12 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                 date TEXT NOT NULL,
                 item_id INTEGER NOT NULL,
                 title TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'time',
                 duration_seconds INTEGER NOT NULL DEFAULT 600,
+                reps_per_set INTEGER NOT NULL DEFAULT 10,
                 sets INTEGER NOT NULL,
                 rest_seconds INTEGER NOT NULL,
+                completed_sets INTEGER NOT NULL DEFAULT 0,
                 completed INTEGER NOT NULL DEFAULT 0,
                 completed_at INTEGER,
                 UNIQUE(date, item_id)
@@ -46,11 +51,19 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
             db.execSQL("ALTER TABLE items ADD COLUMN duration_seconds INTEGER NOT NULL DEFAULT 600")
             db.execSQL("ALTER TABLE daily_entries ADD COLUMN duration_seconds INTEGER NOT NULL DEFAULT 600")
         }
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE items ADD COLUMN mode TEXT NOT NULL DEFAULT 'time'")
+            db.execSQL("ALTER TABLE items ADD COLUMN reps_per_set INTEGER NOT NULL DEFAULT 10")
+            db.execSQL("ALTER TABLE daily_entries ADD COLUMN mode TEXT NOT NULL DEFAULT 'time'")
+            db.execSQL("ALTER TABLE daily_entries ADD COLUMN reps_per_set INTEGER NOT NULL DEFAULT 10")
+            db.execSQL("ALTER TABLE daily_entries ADD COLUMN completed_sets INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("UPDATE daily_entries SET completed_sets = sets WHERE completed = 1")
+        }
     }
 
     fun activeItems(): List<TrainingItem> = readableDatabase.query(
         "items",
-        arrayOf("id", "title", "duration_seconds", "sets", "rest_seconds", "active"),
+        arrayOf("id", "title", "mode", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "active"),
         "active = 1",
         null,
         null,
@@ -60,23 +73,27 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
         buildList {
             while (cursor.moveToNext()) {
                 add(
-                    TrainingItem(
-                        id = cursor.getLong(0),
-                        title = cursor.getString(1),
-                        durationSeconds = cursor.getInt(2),
-                        sets = cursor.getInt(3),
-                        restSeconds = cursor.getInt(4),
-                        active = cursor.getInt(5) == 1
+                        TrainingItem(
+                            id = cursor.getLong(0),
+                            title = cursor.getString(1),
+                            mode = cursor.getString(2).toTrainingMode(),
+                            durationSeconds = cursor.getInt(3),
+                            repsPerSet = cursor.getInt(4),
+                            sets = cursor.getInt(5),
+                            restSeconds = cursor.getInt(6),
+                            active = cursor.getInt(7) == 1
                     )
                 )
             }
         }
     }
 
-    fun saveItem(id: Long?, title: String, durationSeconds: Int, sets: Int, restSeconds: Int) {
+    fun saveItem(id: Long?, title: String, mode: TrainingMode, durationSeconds: Int, repsPerSet: Int, sets: Int, restSeconds: Int) {
         val values = ContentValues().apply {
             put("title", title.trim())
+            put("mode", mode.dbValue)
             put("duration_seconds", durationSeconds.coerceAtLeast(1))
+            put("reps_per_set", repsPerSet.coerceAtLeast(1))
             put("sets", sets.coerceAtLeast(1))
             put("rest_seconds", restSeconds.coerceAtLeast(0))
             put("active", 1)
@@ -91,7 +108,9 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                 "daily_entries",
                 ContentValues().apply {
                     put("title", title.trim())
+                    put("mode", mode.dbValue)
                     put("duration_seconds", durationSeconds.coerceAtLeast(1))
+                    put("reps_per_set", repsPerSet.coerceAtLeast(1))
                     put("sets", sets.coerceAtLeast(1))
                     put("rest_seconds", restSeconds.coerceAtLeast(0))
                 },
@@ -118,7 +137,9 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                 put("date", date)
                 put("item_id", item.id)
                 put("title", item.title)
+                put("mode", item.mode.dbValue)
                 put("duration_seconds", item.durationSeconds)
+                put("reps_per_set", item.repsPerSet)
                 put("sets", item.sets)
                 put("rest_seconds", item.restSeconds)
             }
@@ -130,7 +151,7 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
         ensureEntriesFor(date)
         return readableDatabase.query(
             "daily_entries",
-            arrayOf("id", "date", "item_id", "title", "duration_seconds", "sets", "rest_seconds", "completed", "completed_at"),
+            arrayOf("id", "date", "item_id", "title", "mode", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "completed_sets", "completed", "completed_at"),
             "date = ?",
             arrayOf(date),
             null,
@@ -145,11 +166,14 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                             date = cursor.getString(1),
                             itemId = cursor.getLong(2),
                             title = cursor.getString(3),
-                            durationSeconds = cursor.getInt(4),
-                            sets = cursor.getInt(5),
-                            restSeconds = cursor.getInt(6),
-                            completed = cursor.getInt(7) == 1,
-                            completedAt = if (cursor.isNull(8)) null else cursor.getLong(8)
+                            mode = cursor.getString(4).toTrainingMode(),
+                            durationSeconds = cursor.getInt(5),
+                            repsPerSet = cursor.getInt(6),
+                            sets = cursor.getInt(7),
+                            restSeconds = cursor.getInt(8),
+                            completedSets = cursor.getInt(9),
+                            completed = cursor.getInt(10) == 1,
+                            completedAt = if (cursor.isNull(11)) null else cursor.getLong(11)
                         )
                     )
                 }
@@ -158,18 +182,32 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
     }
 
     fun toggleEntry(id: Long, completed: Boolean) {
+        val sets = readableDatabase.rawQuery(
+            "SELECT sets FROM daily_entries WHERE id = ?",
+            arrayOf(id.toString())
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else 0 }
         val values = ContentValues().apply {
             put("completed", if (completed) 1 else 0)
+            put("completed_sets", if (completed) sets else 0)
             if (completed) put("completed_at", System.currentTimeMillis()) else putNull("completed_at")
         }
         writableDatabase.update("daily_entries", values, "id = ?", arrayOf(id.toString()))
     }
 
-    fun updateEntryPlan(id: Long, durationSeconds: Int, sets: Int, restSeconds: Int) {
+    fun updateEntryPlan(id: Long, mode: TrainingMode, durationSeconds: Int, repsPerSet: Int, sets: Int, restSeconds: Int, completedSets: Int? = null) {
+        val safeSets = sets.coerceAtLeast(1)
+        val safeCompletedSets = completedSets?.coerceIn(0, safeSets)
         val values = ContentValues().apply {
+            put("mode", mode.dbValue)
             put("duration_seconds", durationSeconds.coerceAtLeast(1))
-            put("sets", sets.coerceAtLeast(1))
+            put("reps_per_set", repsPerSet.coerceAtLeast(1))
+            put("sets", safeSets)
             put("rest_seconds", restSeconds.coerceAtLeast(0))
+            safeCompletedSets?.let {
+                put("completed_sets", it)
+                put("completed", if (it >= safeSets) 1 else 0)
+                if (it >= safeSets) put("completed_at", System.currentTimeMillis()) else putNull("completed_at")
+            }
         }
         writableDatabase.update("daily_entries", values, "id = ?", arrayOf(id.toString()))
     }
@@ -192,15 +230,17 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
 
     private fun seed(db: SQLiteDatabase) {
         listOf(
-            TrainingItem(0, "運球手感", 600, 4, 45),
-            TrainingItem(0, "定點投籃", 900, 5, 60),
-            TrainingItem(0, "上籃腳步", 600, 4, 45),
-            TrainingItem(0, "罰球", 480, 3, 30),
-            TrainingItem(0, "核心與伸展", 600, 3, 60)
+            TrainingItem(0, "運球手感", TrainingMode.Time, 600, 10, 4, 45),
+            TrainingItem(0, "定點投籃", TrainingMode.Reps, 60, 20, 5, 60),
+            TrainingItem(0, "上籃腳步", TrainingMode.Reps, 60, 12, 4, 45),
+            TrainingItem(0, "罰球", TrainingMode.Reps, 60, 10, 3, 30),
+            TrainingItem(0, "核心與伸展", TrainingMode.Time, 600, 10, 3, 60)
         ).forEachIndexed { index, item ->
             db.insert("items", null, ContentValues().apply {
                 put("title", item.title)
+                put("mode", item.mode.dbValue)
                 put("duration_seconds", item.durationSeconds)
+                put("reps_per_set", item.repsPerSet)
                 put("sets", item.sets)
                 put("rest_seconds", item.restSeconds)
                 put("active", 1)
@@ -208,4 +248,15 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
             })
         }
     }
+}
+
+private val TrainingMode.dbValue: String
+    get() = when (this) {
+        TrainingMode.Time -> "time"
+        TrainingMode.Reps -> "reps"
+    }
+
+private fun String.toTrainingMode(): TrainingMode = when (this) {
+    "reps" -> TrainingMode.Reps
+    else -> TrainingMode.Time
 }

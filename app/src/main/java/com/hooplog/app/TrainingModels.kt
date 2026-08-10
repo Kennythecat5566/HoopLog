@@ -1,9 +1,16 @@
 package com.hooplog.app
 
+enum class TrainingMode {
+    Time,
+    Reps
+}
+
 data class TrainingItem(
     val id: Long,
     val title: String,
+    val mode: TrainingMode,
     val durationSeconds: Int,
+    val repsPerSet: Int,
     val sets: Int,
     val restSeconds: Int,
     val active: Boolean = true
@@ -14,9 +21,12 @@ data class DailyEntry(
     val date: String,
     val itemId: Long,
     val title: String,
+    val mode: TrainingMode,
     val durationSeconds: Int,
+    val repsPerSet: Int,
     val sets: Int,
     val restSeconds: Int,
+    val completedSets: Int,
     val completed: Boolean,
     val completedAt: Long?
 )

@@ -114,17 +114,25 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
         reload()
     }
 
-    fun updateEntryPlan(entry: DailyEntry, durationSeconds: Int, sets: Int, restSeconds: Int) {
-        trainingStore.updateEntryPlan(entry.id, durationSeconds, sets, restSeconds)
+    fun updateEntryPlan(
+        entry: DailyEntry,
+        mode: TrainingMode,
+        durationSeconds: Int,
+        repsPerSet: Int,
+        sets: Int,
+        restSeconds: Int,
+        completedSets: Int? = null
+    ) {
+        trainingStore.updateEntryPlan(entry.id, mode, durationSeconds, repsPerSet, sets, restSeconds, completedSets)
         reload()
     }
 
-    fun saveItem(id: Long?, title: String, durationSeconds: Int, sets: Int, restSeconds: Int) {
+    fun saveItem(id: Long?, title: String, mode: TrainingMode, durationSeconds: Int, repsPerSet: Int, sets: Int, restSeconds: Int) {
         if (title.isBlank()) {
             state = state.copy(message = "請輸入訓練項目")
             return
         }
-        trainingStore.saveItem(id, title, durationSeconds, sets, restSeconds)
+        trainingStore.saveItem(id, title, mode, durationSeconds, repsPerSet, sets, restSeconds)
         reload()
     }
 
@@ -210,8 +218,8 @@ fun HoopLogApp(vm: HoopLogViewModel = viewModel()) {
                         ItemDialog(
                             item = editing,
                             onDismiss = { showDialog = false },
-                            onSave = { title, duration, sets, rest ->
-                                vm.saveItem(editing?.id, title, duration, sets, rest)
+                            onSave = { title, mode, duration, reps, sets, rest ->
+                                vm.saveItem(editing?.id, title, mode, duration, reps, sets, rest)
                                 showDialog = false
                             }
                         )
@@ -257,8 +265,8 @@ private fun AppBar(screen: Screen) {
 private fun TodayScreen(
     state: UiState,
     onToggle: (DailyEntry, Boolean) -> Unit,
-    onUpdateEntryPlan: (DailyEntry, Int, Int, Int) -> Unit,
-    onSaveItem: (Long?, String, Int, Int, Int) -> Unit,
+    onUpdateEntryPlan: (DailyEntry, TrainingMode, Int, Int, Int, Int, Int?) -> Unit,
+    onSaveItem: (Long?, String, TrainingMode, Int, Int, Int, Int) -> Unit,
     onArchiveItem: (Long) -> Unit
 ) {
     val entries = state.entries
@@ -273,13 +281,13 @@ private fun TodayScreen(
             items(entries, key = { it.id }) { entry ->
                 TrainingRow(
                     title = entry.title,
-                    detail = "每組 ${formatDuration(entry.durationSeconds)} · ${entry.sets} 組 · 休息 ${entry.restSeconds} 秒",
+                    detail = entry.planDetail(),
                     checked = entry.completed,
                     onChecked = { onToggle(entry, it) },
                     onClick = { timerEntry = entry },
                     onEdit = {
                         editing = state.items.firstOrNull { it.id == entry.itemId }
-                            ?: TrainingItem(entry.itemId, entry.title, entry.durationSeconds, entry.sets, entry.restSeconds)
+                            ?: TrainingItem(entry.itemId, entry.title, entry.mode, entry.durationSeconds, entry.repsPerSet, entry.sets, entry.restSeconds)
                     },
                     onDelete = { onArchiveItem(entry.itemId) }
                 )
@@ -290,7 +298,9 @@ private fun TodayScreen(
     timerEntry?.let { entry ->
         TrainingTimerDialog(
             entry = entry,
-            onPlanChange = { duration, sets, rest -> onUpdateEntryPlan(entry, duration, sets, rest) },
+            onPlanChange = { mode, duration, reps, sets, rest, completed ->
+                onUpdateEntryPlan(entry, mode, duration, reps, sets, rest, completed)
+            },
             onDismiss = { timerEntry = null },
             onFinish = {
                 onToggle(entry, true)
@@ -303,8 +313,8 @@ private fun TodayScreen(
         ItemDialog(
             item = item,
             onDismiss = { editing = null },
-            onSave = { title, duration, sets, rest ->
-                onSaveItem(item.id, title, duration, sets, rest)
+            onSave = { title, mode, duration, reps, sets, rest ->
+                onSaveItem(item.id, title, mode, duration, reps, sets, rest)
                 editing = null
             }
         )
@@ -376,7 +386,7 @@ private fun HistoryScreen(state: UiState, onSelect: (String) -> Unit) {
             items(state.historyEntries, key = { it.id }) { entry ->
                 TrainingRow(
                     title = entry.title,
-                    detail = "每組 ${formatDuration(entry.durationSeconds)} · ${entry.sets} 組 · 休息 ${entry.restSeconds} 秒",
+                    detail = "${entry.completedSets}/${entry.sets} 組 · ${entry.planDetail()}",
                     checked = entry.completed,
                     onChecked = {},
                     onClick = {}
@@ -446,8 +456,8 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
         ItemDialog(
             item = editItem,
             onDismiss = { showDialog = false },
-            onSave = { title, duration, sets, rest ->
-                vm.saveItem(editItem?.id, title, duration, sets, rest)
+            onSave = { title, mode, duration, reps, sets, rest ->
+                vm.saveItem(editItem?.id, title, mode, duration, reps, sets, rest)
                 showDialog = false
             }
         )
@@ -475,7 +485,7 @@ private fun EditableItemRow(
             Column(Modifier.padding(12.dp)) {
                 Text(item.title, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "每組 ${formatDuration(item.durationSeconds)} · ${item.sets} 組 · 休息 ${item.restSeconds} 秒",
+                    item.planDetail(),
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -493,10 +503,12 @@ private fun EditableItemRow(
 private fun ItemDialog(
     item: TrainingItem?,
     onDismiss: () -> Unit,
-    onSave: (String, Int, Int, Int) -> Unit
+    onSave: (String, TrainingMode, Int, Int, Int, Int) -> Unit
 ) {
     var title by remember(item) { mutableStateOf(item?.title ?: "") }
+    var mode by remember(item) { mutableStateOf(item?.mode ?: TrainingMode.Time) }
     var duration by remember(item) { mutableStateOf(((item?.durationSeconds ?: 600) / 60).coerceAtLeast(1).toString()) }
+    var reps by remember(item) { mutableStateOf((item?.repsPerSet ?: 10).toString()) }
     var sets by remember(item) { mutableStateOf((item?.sets ?: 3).toString()) }
     var rest by remember(item) { mutableStateOf((item?.restSeconds ?: 60).toString()) }
 
@@ -506,13 +518,31 @@ private fun ItemDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(title, { title = it }, label = { Text("名稱") }, singleLine = true)
-                OutlinedTextField(
-                    value = duration,
-                    onValueChange = { duration = it.filter(Char::isDigit) },
-                    label = { Text("每組訓練時間（分鐘）") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { mode = TrainingMode.Time }, enabled = mode != TrainingMode.Time) {
+                        Text("計時")
+                    }
+                    Button(onClick = { mode = TrainingMode.Reps }, enabled = mode != TrainingMode.Reps) {
+                        Text("次數")
+                    }
+                }
+                if (mode == TrainingMode.Time) {
+                    OutlinedTextField(
+                        value = duration,
+                        onValueChange = { duration = it.filter(Char::isDigit) },
+                        label = { Text("每組訓練時間（分鐘）") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                } else {
+                    OutlinedTextField(
+                        value = reps,
+                        onValueChange = { reps = it.filter(Char::isDigit) },
+                        label = { Text("每組次數") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                }
                 OutlinedTextField(
                     value = sets,
                     onValueChange = { sets = it.filter(Char::isDigit) },
@@ -534,7 +564,9 @@ private fun ItemDialog(
                 onClick = {
                     onSave(
                         title,
+                        mode,
                         (duration.toIntOrNull() ?: 1) * 60,
+                        reps.toIntOrNull() ?: 1,
                         sets.toIntOrNull() ?: 1,
                         rest.toIntOrNull() ?: 0
                     )
@@ -585,14 +617,17 @@ private fun ItemActionMenu(
 @Composable
 private fun TrainingTimerDialog(
     entry: DailyEntry,
-    onPlanChange: (Int, Int, Int) -> Unit,
+    onPlanChange: (TrainingMode, Int, Int, Int, Int, Int?) -> Unit,
     onDismiss: () -> Unit,
     onFinish: () -> Unit
 ) {
+    var mode by remember(entry.id) { mutableStateOf(entry.mode) }
     var workSeconds by remember(entry.id) { mutableStateOf(entry.durationSeconds.coerceAtLeast(1)) }
+    var repsPerSet by remember(entry.id) { mutableStateOf(entry.repsPerSet.coerceAtLeast(1)) }
     var setCount by remember(entry.id) { mutableStateOf(entry.sets.coerceAtLeast(1)) }
     var restSeconds by remember(entry.id) { mutableStateOf(entry.restSeconds.coerceAtLeast(0)) }
-    var currentSet by remember(entry.id) { mutableStateOf(1) }
+    var completedSets by remember(entry.id) { mutableStateOf(entry.completedSets.coerceIn(0, setCount)) }
+    var activeSet by remember(entry.id) { mutableStateOf((completedSets + 1).coerceAtMost(setCount)) }
     var isResting by remember(entry.id) { mutableStateOf(false) }
     var remaining by remember(entry.id) { mutableStateOf(workSeconds) }
     var running by remember(entry.id) { mutableStateOf(false) }
@@ -606,40 +641,57 @@ private fun TrainingTimerDialog(
         }
     }
 
-    LaunchedEffect(running, remaining, currentSet, isResting, setCount, restSeconds, workSeconds) {
+    LaunchedEffect(running, remaining, activeSet, isResting, setCount, restSeconds, workSeconds) {
         if (!running || remaining > 0) return@LaunchedEffect
         when {
-            !isResting && currentSet < setCount && restSeconds > 0 -> {
+            !isResting -> {
+                completedSets = completedSets.coerceAtLeast(activeSet)
+                onPlanChange(mode, workSeconds, repsPerSet, setCount, restSeconds, completedSets)
+                if (completedSets >= setCount) {
+                    onFinish()
+                } else if (restSeconds > 0) {
+                    isResting = true
+                    remaining = restSeconds
+                } else {
+                    activeSet = completedSets + 1
+                    remaining = workSeconds
+                }
+            }
+            isResting -> {
                 isResting = true
-                remaining = restSeconds
-            }
-            !isResting && currentSet < setCount -> {
-                currentSet += 1
-                remaining = workSeconds
-            }
-            isResting && currentSet < setCount -> {
                 isResting = false
-                currentSet += 1
+                activeSet = (completedSets + 1).coerceAtMost(setCount)
                 remaining = workSeconds
             }
-            else -> onFinish()
         }
     }
 
-    fun applyPlan(nextWork: Int = workSeconds, nextSets: Int = setCount, nextRest: Int = restSeconds) {
+    fun applyPlan(
+        nextMode: TrainingMode = mode,
+        nextWork: Int = workSeconds,
+        nextReps: Int = repsPerSet,
+        nextSets: Int = setCount,
+        nextRest: Int = restSeconds,
+        nextCompleted: Int = completedSets
+    ) {
         val safeWork = nextWork.coerceAtLeast(5)
+        val safeReps = nextReps.coerceAtLeast(1)
         val safeSets = nextSets.coerceAtLeast(1)
         val safeRest = nextRest.coerceAtLeast(0)
+        val safeCompleted = nextCompleted.coerceIn(0, safeSets)
+        mode = nextMode
         workSeconds = safeWork
+        repsPerSet = safeReps
         setCount = safeSets
         restSeconds = safeRest
-        if (currentSet > safeSets) currentSet = safeSets
+        completedSets = safeCompleted
+        activeSet = (safeCompleted + 1).coerceAtMost(safeSets)
         remaining = if (running) remaining.coerceAtMost(if (isResting) safeRest.coerceAtLeast(1) else safeWork) else if (isResting) safeRest else safeWork
         if (isResting && safeRest == 0) {
             isResting = false
             remaining = safeWork
         }
-        onPlanChange(safeWork, safeSets, safeRest)
+        onPlanChange(nextMode, safeWork, safeReps, safeSets, safeRest, safeCompleted)
     }
 
     AlertDialog(
@@ -647,52 +699,78 @@ private fun TrainingTimerDialog(
         title = { Text(entry.title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text(
-                    if (isResting) "第 $currentSet 組後休息" else "第 $currentSet / $setCount 組",
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Text(
-                    formatDuration(remaining),
-                    style = MaterialTheme.typography.displayMedium
-                )
-                LinearProgressIndicator(
-                    progress = { progress.coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { applyPlan(nextMode = TrainingMode.Time) }, enabled = mode != TrainingMode.Time) {
+                        Text("計時")
+                    }
+                    Button(onClick = { applyPlan(nextMode = TrainingMode.Reps) }, enabled = mode != TrainingMode.Reps) {
+                        Text("次數")
+                    }
+                }
                 CounterControl(
                     label = "組數",
                     value = "${setCount} 組",
-                    onDecrease = { applyPlan(nextSets = (setCount - 1).coerceAtLeast(currentSet)) },
+                    onDecrease = { applyPlan(nextSets = (setCount - 1).coerceAtLeast(completedSets.coerceAtLeast(1))) },
                     onIncrease = { applyPlan(nextSets = setCount + 1) }
                 )
-                CounterControl(
-                    label = "每組時間",
-                    value = formatDuration(workSeconds),
-                    onDecrease = { applyPlan(nextWork = workSeconds - 30) },
-                    onIncrease = { applyPlan(nextWork = workSeconds + 30) }
-                )
+                if (mode == TrainingMode.Time) {
+                    CounterControl(
+                        label = "每組時間",
+                        value = formatDuration(workSeconds),
+                        onDecrease = { applyPlan(nextWork = workSeconds - 30) },
+                        onIncrease = { applyPlan(nextWork = workSeconds + 30) }
+                    )
+                } else {
+                    CounterControl(
+                        label = "每組次數",
+                        value = "${repsPerSet} 次",
+                        onDecrease = { applyPlan(nextReps = repsPerSet - 1) },
+                        onIncrease = { applyPlan(nextReps = repsPerSet + 1) }
+                    )
+                }
                 CounterControl(
                     label = "休息時間",
                     value = formatDuration(restSeconds),
                     onDecrease = { applyPlan(nextRest = restSeconds - 15) },
                     onIncrease = { applyPlan(nextRest = restSeconds + 15) }
                 )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    repeat(setCount) { index ->
+                        val setNumber = index + 1
+                        val completed = setNumber <= completedSets
+                        SetCard(
+                            setNumber = setNumber,
+                            completed = completed,
+                            enabled = !completed && setNumber == activeSet,
+                            mode = mode,
+                            repsPerSet = repsPerSet,
+                            remaining = if (setNumber == activeSet) remaining else workSeconds,
+                            running = running && setNumber == activeSet && !isResting,
+                            resting = isResting && setNumber == activeSet,
+                            progress = if (setNumber == activeSet) progress else 0f,
+                            onStartPause = {
+                                if (mode == TrainingMode.Time) {
+                                    activeSet = setNumber
+                                    running = !running
+                                }
+                            },
+                            onComplete = {
+                                running = false
+                                isResting = false
+                                applyPlan(nextCompleted = setNumber.coerceAtLeast(completedSets))
+                                if (setNumber >= setCount) onFinish()
+                            }
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = { running = !running }) {
-                    Text(
-                        when {
-                            running -> "暫停"
-                            remaining == workSeconds && currentSet == 1 && !isResting -> "開始"
-                            else -> "繼續"
-                        }
-                    )
-                }
-                TextButton(onClick = onFinish) {
-                    Text("提前結束")
-                }
+            TextButton(onClick = {
+                applyPlan(nextCompleted = setCount)
+                onFinish()
+            }) {
+                Text("全部完成")
             }
         },
         dismissButton = {
@@ -701,6 +779,60 @@ private fun TrainingTimerDialog(
             }
         }
     )
+}
+
+@Composable
+private fun SetCard(
+    setNumber: Int,
+    completed: Boolean,
+    enabled: Boolean,
+    mode: TrainingMode,
+    repsPerSet: Int,
+    remaining: Int,
+    running: Boolean,
+    resting: Boolean,
+    progress: Float,
+    onStartPause: () -> Unit,
+    onComplete: () -> Unit
+) {
+    Surface(tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("第 $setNumber 組", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        when {
+                            completed -> "已完成"
+                            resting -> "休息 ${formatDuration(remaining)}"
+                            mode == TrainingMode.Time -> formatDuration(remaining)
+                            else -> "${repsPerSet} 次"
+                        },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                Checkbox(checked = completed, onCheckedChange = { if (!completed) onComplete() })
+            }
+            if (enabled && mode == TrainingMode.Time) {
+                LinearProgressIndicator(
+                    progress = { progress.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = onStartPause) {
+                        Text(if (running) "暫停" else "開始")
+                    }
+                    TextButton(onClick = onComplete) {
+                        Text("完成本組")
+                    }
+                }
+            }
+            if (enabled && mode == TrainingMode.Reps) {
+                TextButton(onClick = onComplete) {
+                    Text("完成本組")
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -731,4 +863,14 @@ private fun formatDuration(seconds: Int): String {
     val minutes = safeSeconds / 60
     val remainder = safeSeconds % 60
     return "%02d:%02d".format(minutes, remainder)
+}
+
+private fun DailyEntry.planDetail(): String = when (mode) {
+    TrainingMode.Time -> "計時 · 每組 ${formatDuration(durationSeconds)} · ${sets} 組 · 休息 ${restSeconds} 秒"
+    TrainingMode.Reps -> "次數 · 每組 ${repsPerSet} 次 · ${sets} 組 · 休息 ${restSeconds} 秒"
+}
+
+private fun TrainingItem.planDetail(): String = when (mode) {
+    TrainingMode.Time -> "計時 · 每組 ${formatDuration(durationSeconds)} · ${sets} 組 · 休息 ${restSeconds} 秒"
+    TrainingMode.Reps -> "次數 · 每組 ${repsPerSet} 次 · ${sets} 組 · 休息 ${restSeconds} 秒"
 }
