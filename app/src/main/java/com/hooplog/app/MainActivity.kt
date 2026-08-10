@@ -6,9 +6,11 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -62,15 +64,26 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.time.LocalDate
 import java.time.YearMonth
+import kotlin.math.PI
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -1451,6 +1464,7 @@ private fun ColorPicker(
     onColorChange: (String) -> Unit
 ) {
     var typed by remember(colorHex) { mutableStateOf(colorHex.normalizeColorInput()) }
+    val hsv = colorHex.toHsvOrDefault()
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
@@ -1461,32 +1475,16 @@ private fun ColorPicker(
                 modifier = Modifier.height(32.dp).weight(0.35f)
             ) {}
         }
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(cardColorChoices, key = { it }) { color ->
-                ColorChoice(color, colorHex.equals(color, ignoreCase = true)) {
-                    typed = color
-                    onColorChange(color)
-                }
+        ColorWheel(
+            hue = hsv.hue,
+            saturation = hsv.saturation,
+            value = hsv.value,
+            onChange = { next ->
+                val hex = next.toHex()
+                typed = hex
+                onColorChange(hex)
             }
-        }
-        Text("光譜", style = MaterialTheme.typography.bodySmall)
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(spectrumColors, key = { it }) { color ->
-                ColorChoice(color, colorHex.equals(color, ignoreCase = true)) {
-                    typed = color
-                    onColorChange(color)
-                }
-            }
-        }
-        Text("明暗", style = MaterialTheme.typography.bodySmall)
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(toneColors(colorHex), key = { it }) { color ->
-                ColorChoice(color, colorHex.equals(color, ignoreCase = true)) {
-                    typed = color
-                    onColorChange(color)
-                }
-            }
-        }
+        )
         OutlinedTextField(
             value = typed,
             onValueChange = { value ->
@@ -1497,6 +1495,92 @@ private fun ColorPicker(
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
+    }
+}
+
+@Composable
+private fun ColorWheel(
+    hue: Float,
+    saturation: Float,
+    value: Float,
+    onChange: (HsvColor) -> Unit
+) {
+    val hueColors = listOf(
+        Color.Red,
+        Color.Yellow,
+        Color.Green,
+        Color.Cyan,
+        Color.Blue,
+        Color.Magenta,
+        Color.Red
+    )
+    val selectedHue = HsvColor(hue, 1f, 1f).toComposeColor()
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(240.dp)
+            .pointerInput(hue, saturation, value) {
+                detectTapGestures { offset ->
+                    val center = Offset(size.width / 2f, size.height / 2f)
+                    val wheelRadius = minOf(size.width, size.height) * 0.46f
+                    val ringWidth = wheelRadius * 0.22f
+                    val innerRadius = wheelRadius - ringWidth - 8.dp.toPx()
+                    val distance = hypot(offset.x - center.x, offset.y - center.y)
+                    if (distance in (wheelRadius - ringWidth)..wheelRadius) {
+                        val degrees = ((atan2(offset.y - center.y, offset.x - center.x) * 180f / PI.toFloat()) + 360f) % 360f
+                        onChange(HsvColor(degrees, saturation, value))
+                    } else if (distance <= innerRadius) {
+                        val nextSaturation = ((offset.x - center.x) / innerRadius / 2f + 0.5f).coerceIn(0f, 1f)
+                        val nextValue = (0.5f - (offset.y - center.y) / innerRadius / 2f).coerceIn(0f, 1f)
+                        onChange(HsvColor(hue, nextSaturation, nextValue))
+                    }
+                }
+            }
+    ) {
+        val center = Offset(size.width / 2f, size.height / 2f)
+        val wheelRadius = minOf(size.width, size.height) * 0.46f
+        val ringWidth = wheelRadius * 0.22f
+        val innerRadius = wheelRadius - ringWidth - 8.dp.toPx()
+        val hueAngle = hue * PI.toFloat() / 180f
+        val hueMarkerRadius = wheelRadius - ringWidth / 2f
+        val hueMarker = Offset(
+            center.x + cos(hueAngle) * hueMarkerRadius,
+            center.y + sin(hueAngle) * hueMarkerRadius
+        )
+        val toneMarker = Offset(
+            center.x + (saturation * 2f - 1f) * innerRadius,
+            center.y + ((1f - value) * 2f - 1f) * innerRadius
+        )
+
+        drawCircle(
+            brush = Brush.sweepGradient(hueColors, center),
+            radius = wheelRadius - ringWidth / 2f,
+            center = center,
+            style = Stroke(width = ringWidth, cap = StrokeCap.Round)
+        )
+        drawCircle(color = selectedHue, radius = innerRadius, center = center)
+        drawCircle(
+            brush = Brush.horizontalGradient(
+                listOf(Color.White, Color.Transparent),
+                startX = center.x - innerRadius,
+                endX = center.x + innerRadius
+            ),
+            radius = innerRadius,
+            center = center
+        )
+        drawCircle(
+            brush = Brush.verticalGradient(
+                listOf(Color.Transparent, Color.Black),
+                startY = center.y - innerRadius,
+                endY = center.y + innerRadius
+            ),
+            radius = innerRadius,
+            center = center
+        )
+        drawCircle(color = Color.White, radius = 9.dp.toPx(), center = hueMarker, style = Stroke(width = 2.dp.toPx()))
+        drawCircle(color = HsvColor(hue, saturation, value).toComposeColor(), radius = 13.dp.toPx(), center = hueMarker)
+        drawCircle(color = Color.White, radius = 8.dp.toPx(), center = toneMarker, style = Stroke(width = 2.dp.toPx()))
+        drawCircle(color = Color(0x66000000), radius = 10.dp.toPx(), center = toneMarker, style = Stroke(width = 1.dp.toPx()))
     }
 }
 
@@ -1550,6 +1634,50 @@ private fun String.normalizeColorInput(): String {
 }
 
 private fun String.isValidColorHex(): Boolean = Regex("^#[0-9A-F]{6}$").matches(this)
+
+private data class HsvColor(val hue: Float, val saturation: Float, val value: Float)
+
+private fun String.toHsvOrDefault(): HsvColor {
+    val base = normalizeColorInput().takeIf { it.isValidColorHex() } ?: "#3B82F6"
+    val clean = base.removePrefix("#")
+    val r = clean.substring(0, 2).toInt(16) / 255f
+    val g = clean.substring(2, 4).toInt(16) / 255f
+    val b = clean.substring(4, 6).toInt(16) / 255f
+    val max = maxOf(r, g, b)
+    val min = minOf(r, g, b)
+    val delta = max - min
+    val hue = when {
+        delta == 0f -> 0f
+        max == r -> (60f * ((g - b) / delta) + 360f) % 360f
+        max == g -> 60f * ((b - r) / delta) + 120f
+        else -> 60f * ((r - g) / delta) + 240f
+    }
+    val saturation = if (max == 0f) 0f else delta / max
+    return HsvColor(hue, saturation.coerceIn(0f, 1f), max.coerceIn(0f, 1f))
+}
+
+private fun HsvColor.toHex(): String {
+    val cleanHue = ((hue % 360f) + 360f) % 360f
+    val cleanSaturation = saturation.coerceIn(0f, 1f)
+    val cleanValue = value.coerceIn(0f, 1f)
+    val chroma = cleanValue * cleanSaturation
+    val x = chroma * (1f - kotlin.math.abs((cleanHue / 60f) % 2f - 1f))
+    val match = cleanValue - chroma
+    val (r1, g1, b1) = when {
+        cleanHue < 60f -> Triple(chroma, x, 0f)
+        cleanHue < 120f -> Triple(x, chroma, 0f)
+        cleanHue < 180f -> Triple(0f, chroma, x)
+        cleanHue < 240f -> Triple(0f, x, chroma)
+        cleanHue < 300f -> Triple(x, 0f, chroma)
+        else -> Triple(chroma, 0f, x)
+    }
+    val r = ((r1 + match) * 255f).roundToInt().coerceIn(0, 255)
+    val g = ((g1 + match) * 255f).roundToInt().coerceIn(0, 255)
+    val b = ((b1 + match) * 255f).roundToInt().coerceIn(0, 255)
+    return "#%02X%02X%02X".format(r, g, b)
+}
+
+private fun HsvColor.toComposeColor(): Color = parseColor(toHex(), Color.White)
 
 private fun toneColors(colorHex: String): List<String> {
     val base = colorHex.normalizeColorInput().takeIf { it.isValidColorHex() } ?: "#3B82F6"
