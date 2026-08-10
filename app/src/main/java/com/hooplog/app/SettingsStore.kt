@@ -5,10 +5,13 @@ import android.content.Context
 class SettingsStore(context: Context) {
     private val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
-    fun loadUpdateSettings(): UpdateSettings = UpdateSettings(
-        owner = prefs.getString("github_owner", "") ?: "",
-        repo = prefs.getString("github_repo", "") ?: ""
-    )
+    fun loadUpdateSettings(): UpdateSettings {
+        val owner = prefs.getString("github_owner", "")?.ifBlank { UpdateDefaults.owner }
+            ?: UpdateDefaults.owner
+        val repo = prefs.getString("github_repo", "")?.ifBlank { UpdateDefaults.repo }
+            ?: UpdateDefaults.repo
+        return UpdateSettings(owner = owner, repo = repo)
+    }
 
     fun saveUpdateSettings(settings: UpdateSettings) {
         prefs.edit()

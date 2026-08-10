@@ -32,6 +32,11 @@ data class UpdateSettings(
     val repo: String = ""
 )
 
+object UpdateDefaults {
+    const val owner = "Kennythecat5566"
+    const val repo = "HoopLog"
+}
+
 data class UpdateInfo(
     val latestVersion: String,
     val releaseUrl: String,

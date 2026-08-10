@@ -26,9 +26,9 @@ app/build/outputs/apk/debug/app-debug.apk
 
 一般 Android App 無法像 Play Store 一樣從 GitHub 背景靜默自動更新。HoopLog 會檢查 GitHub 最新 Release，若版本較新，開啟 Release 頁面讓使用者下載 APK 並安裝。
 
-到 App 的「設定」頁填入：
+App 的「設定」頁已預設連到：
 
-- Owner：GitHub 帳號或組織
-- Repo：這個專案的 repo 名稱
+- Owner：Kennythecat5566
+- Repo：HoopLog
 
 GitHub Actions 會在推 tag 時自動產生 Release APK。
