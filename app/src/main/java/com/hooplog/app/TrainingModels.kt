@@ -30,6 +30,8 @@ data class TrainingItem(
     val repsPerSet: Int,
     val sets: Int,
     val restSeconds: Int,
+    val comment: String = "",
+    val videoUrl: String = "",
     val active: Boolean = true
 )
 
@@ -55,6 +57,8 @@ data class DailyEntry(
     val restSeconds: Int,
     val completedSets: Int,
     val setPlans: List<TrainingSetPlan>,
+    val comment: String,
+    val videoUrl: String,
     val completed: Boolean,
     val completedAt: Long?
 )
@@ -62,7 +66,15 @@ data class DailyEntry(
 data class DaySummary(
     val date: String,
     val completed: Int,
-    val total: Int
+    val total: Int,
+    val durationSeconds: Int = 0
+)
+
+data class DaySession(
+    val date: String,
+    val startedAt: Long?,
+    val endedAt: Long?,
+    val durationSeconds: Int
 )
 
 data class UpdateSettings(

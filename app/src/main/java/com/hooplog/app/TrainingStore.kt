@@ -8,7 +8,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDate
 
-class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", null, 7) {
+class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", null, 8) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -34,6 +34,8 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                 reps_per_set INTEGER NOT NULL DEFAULT 10,
                 sets INTEGER NOT NULL,
                 rest_seconds INTEGER NOT NULL,
+                comment TEXT NOT NULL DEFAULT '',
+                video_url TEXT NOT NULL DEFAULT '',
                 active INTEGER NOT NULL DEFAULT 1,
                 sort_order INTEGER NOT NULL DEFAULT 0
             )
@@ -56,9 +58,21 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                 rest_seconds INTEGER NOT NULL,
                 completed_sets INTEGER NOT NULL DEFAULT 0,
                 set_plans TEXT,
+                comment TEXT NOT NULL DEFAULT '',
+                video_url TEXT NOT NULL DEFAULT '',
                 completed INTEGER NOT NULL DEFAULT 0,
                 completed_at INTEGER,
                 UNIQUE(date, item_id)
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            """
+            CREATE TABLE day_sessions (
+                date TEXT PRIMARY KEY,
+                started_at INTEGER,
+                ended_at INTEGER,
+                duration_seconds INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent()
         )
@@ -116,11 +130,27 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                 }
             }
         }
+        if (oldVersion < 8) {
+            db.execSQL("ALTER TABLE items ADD COLUMN comment TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE items ADD COLUMN video_url TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE daily_entries ADD COLUMN comment TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE daily_entries ADD COLUMN video_url TEXT NOT NULL DEFAULT ''")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS day_sessions (
+                    date TEXT PRIMARY KEY,
+                    started_at INTEGER,
+                    ended_at INTEGER,
+                    duration_seconds INTEGER NOT NULL DEFAULT 0
+                )
+                """.trimIndent()
+            )
+        }
     }
 
     fun activeItems(): List<TrainingItem> = readableDatabase.query(
         "items",
-        arrayOf("id", "title", "tag", "color_hex", "priority", "mode", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "active"),
+        arrayOf("id", "title", "tag", "color_hex", "priority", "mode", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "comment", "video_url", "active"),
         "active = 1",
         null,
         null,
@@ -141,7 +171,9 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                             repsPerSet = cursor.getInt(7),
                             sets = cursor.getInt(8),
                             restSeconds = cursor.getInt(9),
-                            active = cursor.getInt(10) == 1
+                            comment = cursor.getString(10),
+                            videoUrl = cursor.getString(11),
+                            active = cursor.getInt(12) == 1
                     )
                 )
             }
@@ -194,7 +226,7 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
         writableDatabase.delete("tags", "name = ?", arrayOf(name))
     }
 
-    fun saveItem(id: Long?, title: String, tag: String, colorHex: String, priority: Int, mode: TrainingMode, durationSeconds: Int, repsPerSet: Int, sets: Int, restSeconds: Int) {
+    fun saveItem(id: Long?, title: String, tag: String, colorHex: String, priority: Int, mode: TrainingMode, durationSeconds: Int, repsPerSet: Int, sets: Int, restSeconds: Int, comment: String, videoUrl: String) {
         val values = ContentValues().apply {
             put("title", title.trim())
             put("tag", tag.cleanTag())
@@ -205,6 +237,8 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
             put("reps_per_set", repsPerSet.coerceAtLeast(1))
             put("sets", sets.coerceAtLeast(1))
             put("rest_seconds", restSeconds.coerceAtLeast(0))
+            put("comment", comment.trim())
+            put("video_url", videoUrl.trim())
             put("active", 1)
         }
         if (id == null) {
@@ -225,6 +259,8 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                     put("reps_per_set", repsPerSet.coerceAtLeast(1))
                     put("sets", sets.coerceAtLeast(1))
                     put("rest_seconds", restSeconds.coerceAtLeast(0))
+                    put("comment", comment.trim())
+                    put("video_url", videoUrl.trim())
                 },
                 "date = ? AND item_id = ?",
                 arrayOf(LocalDate.now().toString(), id.toString())
@@ -261,6 +297,8 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                 put("reps_per_set", item.repsPerSet)
                 put("sets", item.sets)
                 put("rest_seconds", item.restSeconds)
+                put("comment", item.comment)
+                put("video_url", item.videoUrl)
             }
             db.insertWithOnConflict("daily_entries", null, values, SQLiteDatabase.CONFLICT_IGNORE)
         }
@@ -270,7 +308,7 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
         if (ensure) ensureEntriesFor(date)
         return readableDatabase.query(
             "daily_entries",
-            arrayOf("id", "date", "item_id", "title", "tag", "color_hex", "priority", "mode", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "completed_sets", "set_plans", "completed", "completed_at"),
+            arrayOf("id", "date", "item_id", "title", "tag", "color_hex", "priority", "mode", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "completed_sets", "set_plans", "comment", "video_url", "completed", "completed_at"),
             "date = ?",
             arrayOf(date),
             null,
@@ -302,8 +340,10 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                                 sets = cursor.getInt(10),
                                 completedSets = cursor.getInt(12)
                             ),
-                            completed = cursor.getInt(14) == 1,
-                            completedAt = if (cursor.isNull(15)) null else cursor.getLong(15)
+                            comment = cursor.getString(14),
+                            videoUrl = cursor.getString(15),
+                            completed = cursor.getInt(16) == 1,
+                            completedAt = if (cursor.isNull(17)) null else cursor.getLong(17)
                         )
                     )
                 }
@@ -336,6 +376,16 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
             if (completed) put("completed_at", System.currentTimeMillis()) else putNull("completed_at")
         }
         writableDatabase.update("daily_entries", values, "id = ?", arrayOf(id.toString()))
+        entryDate(id)?.let { markSessionCompleteIfDone(it) }
+    }
+
+    fun startSession(date: String = LocalDate.now().toString()) {
+        writableDatabase.insertWithOnConflict("day_sessions", null, ContentValues().apply {
+            put("date", date)
+            put("started_at", System.currentTimeMillis())
+            putNull("ended_at")
+            put("duration_seconds", 0)
+        }, SQLiteDatabase.CONFLICT_IGNORE)
     }
 
     fun updateEntryPlan(
@@ -366,20 +416,66 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
             }
         }
         writableDatabase.update("daily_entries", values, "id = ?", arrayOf(id.toString()))
+        entryDate(id)?.let { markSessionCompleteIfDone(it) }
+    }
+
+    fun sessionFor(date: String): DaySession =
+        readableDatabase.query(
+            "day_sessions",
+            arrayOf("date", "started_at", "ended_at", "duration_seconds"),
+            "date = ?",
+            arrayOf(date),
+            null,
+            null,
+            null
+        ).use { cursor ->
+            if (cursor.moveToFirst()) {
+                DaySession(
+                    date = cursor.getString(0),
+                    startedAt = if (cursor.isNull(1)) null else cursor.getLong(1),
+                    endedAt = if (cursor.isNull(2)) null else cursor.getLong(2),
+                    durationSeconds = cursor.getInt(3)
+                )
+            } else {
+                DaySession(date, null, null, 0)
+            }
+        }
+
+    private fun entryDate(id: Long): String? =
+        readableDatabase.rawQuery("SELECT date FROM daily_entries WHERE id = ?", arrayOf(id.toString())).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }
+
+    private fun markSessionCompleteIfDone(date: String) {
+        val counts = readableDatabase.rawQuery(
+            "SELECT COUNT(*), COALESCE(SUM(completed), 0) FROM daily_entries WHERE date = ?",
+            arrayOf(date)
+        ).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getInt(0) to cursor.getInt(1) else 0 to 0
+        }
+        if (counts.first == 0 || counts.first != counts.second) return
+        val session = sessionFor(date)
+        if (session.startedAt == null || session.endedAt != null) return
+        val ended = System.currentTimeMillis()
+        writableDatabase.update("day_sessions", ContentValues().apply {
+            put("ended_at", ended)
+            put("duration_seconds", ((ended - session.startedAt) / 1000L).toInt().coerceAtLeast(0))
+        }, "date = ?", arrayOf(date))
     }
 
     fun summaries(): List<DaySummary> = readableDatabase.rawQuery(
         """
-        SELECT date, SUM(completed), COUNT(*)
-        FROM daily_entries
-        GROUP BY date
-        ORDER BY date DESC
+        SELECT d.date, SUM(d.completed), COUNT(*), COALESCE(s.duration_seconds, 0)
+        FROM daily_entries d
+        LEFT JOIN day_sessions s ON s.date = d.date
+        GROUP BY d.date, s.duration_seconds
+        ORDER BY d.date DESC
         """.trimIndent(),
         null
     ).use { cursor ->
         buildList {
             while (cursor.moveToNext()) {
-                add(DaySummary(cursor.getString(0), cursor.getInt(1), cursor.getInt(2)))
+                add(DaySummary(cursor.getString(0), cursor.getInt(1), cursor.getInt(2), cursor.getInt(3)))
             }
         }
     }

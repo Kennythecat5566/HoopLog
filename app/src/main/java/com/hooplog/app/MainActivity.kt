@@ -1,6 +1,8 @@
 package com.hooplog.app
 
 import android.app.Application
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -83,6 +85,7 @@ data class UiState(
     val weekEntries: Map<String, List<DailyEntry>> = emptyMap(),
     val items: List<TrainingItem> = emptyList(),
     val summaries: List<DaySummary> = emptyList(),
+    val todaySession: DaySession = DaySession(LocalDate.now().toString(), null, null, 0),
     val selectedHistory: String? = null,
     val historyEntries: List<DailyEntry> = emptyList(),
     val tags: List<TrainingTag> = emptyList(),
@@ -118,6 +121,7 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
             },
             items = trainingStore.activeItems(),
             summaries = trainingStore.summaries(),
+            todaySession = trainingStore.sessionFor(today),
             historyEntries = selected?.let { trainingStore.entriesFor(it, ensure = false) } ?: emptyList(),
             tags = trainingStore.tags(),
             uiSettings = settingsStore.loadUiSettings(),
@@ -144,12 +148,17 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
         reload()
     }
 
-    fun saveItem(id: Long?, title: String, tag: String, colorHex: String, priority: Int, mode: TrainingMode, durationSeconds: Int, repsPerSet: Int, sets: Int, restSeconds: Int) {
+    fun saveItem(id: Long?, title: String, tag: String, colorHex: String, priority: Int, mode: TrainingMode, durationSeconds: Int, repsPerSet: Int, sets: Int, restSeconds: Int, comment: String, videoUrl: String) {
         if (title.isBlank()) {
             state = state.copy(message = "請輸入訓練項目")
             return
         }
-        trainingStore.saveItem(id, title, tag, colorHex, priority, mode, durationSeconds, repsPerSet, sets, restSeconds)
+        trainingStore.saveItem(id, title, tag, colorHex, priority, mode, durationSeconds, repsPerSet, sets, restSeconds, comment, videoUrl)
+        reload()
+    }
+
+    fun startTodaySession() {
+        trainingStore.startSession(state.today)
         reload()
     }
 
@@ -265,8 +274,8 @@ fun HoopLogApp(vm: HoopLogViewModel = viewModel()) {
                             item = editing,
                             availableTags = vm.state.tags,
                             onDismiss = { showDialog = false },
-                            onSave = { title, tag, color, priority, mode, duration, reps, sets, rest ->
-                                vm.saveItem(editing?.id, title, tag, color, priority, mode, duration, reps, sets, rest)
+                            onSave = { title, tag, color, priority, mode, duration, reps, sets, rest, comment, videoUrl ->
+                                vm.saveItem(editing?.id, title, tag, color, priority, mode, duration, reps, sets, rest, comment, videoUrl)
                                 showDialog = false
                             }
                         )
@@ -283,7 +292,7 @@ fun HoopLogApp(vm: HoopLogViewModel = viewModel()) {
                     )
                 }
                 when (screen) {
-                    Screen.Today -> TodayScreen(vm.state, vm::toggle, vm::updateEntryPlan, vm::saveItem, vm::archiveItem)
+                    Screen.Today -> TodayScreen(vm.state, vm::toggle, vm::updateEntryPlan, vm::saveItem, vm::archiveItem, vm::startTodaySession)
                     Screen.History -> HistoryScreen(vm.state, vm::selectHistory)
                     Screen.Settings -> SettingsScreen(vm)
                 }
@@ -315,8 +324,9 @@ private fun TodayScreen(
     state: UiState,
     onToggle: (DailyEntry, Boolean) -> Unit,
     onUpdateEntryPlan: (DailyEntry, TrainingMode, Int, Int, Int, Int, Int?, List<TrainingSetPlan>?) -> Unit,
-    onSaveItem: (Long?, String, String, String, Int, TrainingMode, Int, Int, Int, Int) -> Unit,
-    onArchiveItem: (Long) -> Unit
+    onSaveItem: (Long?, String, String, String, Int, TrainingMode, Int, Int, Int, Int, String, String) -> Unit,
+    onArchiveItem: (Long) -> Unit,
+    onStartSession: () -> Unit
 ) {
     val entries = state.entries
     var homeMode by remember { mutableStateOf(HomeMode.Day) }
@@ -331,6 +341,10 @@ private fun TodayScreen(
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         Text("$completed / ${entries.size}", style = MaterialTheme.typography.displaySmall)
         Text("今日完成", style = MaterialTheme.typography.bodyMedium)
+        Text(
+            if (state.todaySession.startedAt == null) "尚未開始計時" else "當日訓練時長 ${formatDuration(state.todaySession.durationSeconds)}",
+            style = MaterialTheme.typography.bodySmall
+        )
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ChoiceButton("本日", homeMode == HomeMode.Day) { homeMode = HomeMode.Day }
@@ -357,10 +371,13 @@ private fun TodayScreen(
                         colorHex = entry.colorHex,
                         checked = entry.completed,
                         onChecked = { onToggle(entry, it) },
-                        onClick = { timerEntry = entry },
+                        onClick = {
+                            onStartSession()
+                            timerEntry = entry
+                        },
                         onEdit = {
                             editing = state.items.firstOrNull { it.id == entry.itemId }
-                                ?: TrainingItem(entry.itemId, entry.title, entry.tag, entry.colorHex, entry.priority, entry.mode, entry.durationSeconds, entry.repsPerSet, entry.sets, entry.restSeconds)
+                                ?: TrainingItem(entry.itemId, entry.title, entry.tag, entry.colorHex, entry.priority, entry.mode, entry.durationSeconds, entry.repsPerSet, entry.sets, entry.restSeconds, entry.comment, entry.videoUrl)
                         },
                         onDelete = { onArchiveItem(entry.itemId) }
                     )
@@ -394,8 +411,8 @@ private fun TodayScreen(
             item = item,
             availableTags = state.tags,
             onDismiss = { editing = null },
-            onSave = { title, tag, color, priority, mode, duration, reps, sets, rest ->
-                onSaveItem(item.id, title, tag, color, priority, mode, duration, reps, sets, rest)
+            onSave = { title, tag, color, priority, mode, duration, reps, sets, rest, comment, videoUrl ->
+                onSaveItem(item.id, title, tag, color, priority, mode, duration, reps, sets, rest, comment, videoUrl)
                 editing = null
             }
         )
@@ -541,10 +558,11 @@ private fun HistoryScreen(state: UiState, onSelect: (String) -> Unit) {
         Spacer(Modifier.weight(1f))
     }
     detailDate?.let { date ->
+        val summary = state.summaries.firstOrNull { it.date == date }
         AlertDialog(
             onDismissRequest = { detailDate = null },
             containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-            title = { Text(date) },
+            title = { Text("$date · ${formatDuration(summary?.durationSeconds ?: 0)}") },
             text = {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(state.historyEntries, key = { it.id }) { entry ->
@@ -615,7 +633,7 @@ private fun CalendarMonth(
                     ) {
                         Column(Modifier.padding(6.dp), verticalArrangement = Arrangement.SpaceBetween) {
                             Text(date?.dayOfMonth?.toString() ?: "", style = MaterialTheme.typography.bodySmall)
-                            Text(summary?.let { "${it.completed}/${it.total}" } ?: "", style = MaterialTheme.typography.bodySmall)
+                            Text(summary?.let { "${it.completed}/${it.total} ${formatDuration(it.durationSeconds)}" } ?: "", style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
@@ -719,8 +737,8 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
             item = editItem,
             availableTags = vm.state.tags,
             onDismiss = { showDialog = false },
-            onSave = { title, tag, color, priority, mode, duration, reps, sets, rest ->
-                vm.saveItem(editItem?.id, title, tag, color, priority, mode, duration, reps, sets, rest)
+            onSave = { title, tag, color, priority, mode, duration, reps, sets, rest, comment, videoUrl ->
+                vm.saveItem(editItem?.id, title, tag, color, priority, mode, duration, reps, sets, rest, comment, videoUrl)
                 showDialog = false
             }
         )
@@ -913,7 +931,7 @@ private fun ItemDialog(
     item: TrainingItem?,
     availableTags: List<TrainingTag>,
     onDismiss: () -> Unit,
-    onSave: (String, String, String, Int, TrainingMode, Int, Int, Int, Int) -> Unit
+    onSave: (String, String, String, Int, TrainingMode, Int, Int, Int, Int, String, String) -> Unit
 ) {
     var title by remember(item) { mutableStateOf(item?.title ?: "") }
     var tag by remember(item) { mutableStateOf(item?.tag ?: "每日訓練") }
@@ -924,6 +942,8 @@ private fun ItemDialog(
     var reps by remember(item) { mutableStateOf((item?.repsPerSet ?: 10).toString()) }
     var sets by remember(item) { mutableStateOf((item?.sets ?: 3).toString()) }
     var rest by remember(item) { mutableStateOf((item?.restSeconds ?: 60).toString()) }
+    var comment by remember(item) { mutableStateOf(item?.comment ?: "") }
+    var videoUrl by remember(item) { mutableStateOf(item?.videoUrl ?: "") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -998,6 +1018,19 @@ private fun ItemDialog(
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                 )
+                OutlinedTextField(
+                    value = comment,
+                    onValueChange = { comment = it },
+                    label = { Text("Comment") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = videoUrl,
+                    onValueChange = { videoUrl = it },
+                    label = { Text("教學影片連結") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         confirmButton = {
@@ -1012,7 +1045,9 @@ private fun ItemDialog(
                         (duration.toIntOrNull() ?: 1) * 60,
                         reps.toIntOrNull() ?: 1,
                         sets.toIntOrNull() ?: 1,
-                        rest.toIntOrNull() ?: 0
+                        rest.toIntOrNull() ?: 0,
+                        comment,
+                        videoUrl
                     )
                 }
             ) {
@@ -1065,6 +1100,7 @@ private fun TrainingTimerDialog(
     onDismiss: () -> Unit,
     onFinish: () -> Unit
 ) {
+    val context = LocalContext.current
     var mode by remember(entry.id) { mutableStateOf(entry.mode) }
     var workSeconds by remember(entry.id) { mutableStateOf(entry.durationSeconds.coerceAtLeast(1)) }
     var repsPerSet by remember(entry.id) { mutableStateOf(entry.repsPerSet.coerceAtLeast(1)) }
@@ -1181,6 +1217,20 @@ private fun TrainingTimerDialog(
         title = { Text(entry.title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                if (entry.comment.isNotBlank()) {
+                    Surface(tonalElevation = 1.dp, shape = MaterialTheme.shapes.small, modifier = Modifier.fillMaxWidth()) {
+                        Text(entry.comment, modifier = Modifier.padding(10.dp), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                if (entry.videoUrl.isNotBlank()) {
+                    Button(onClick = {
+                        runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(entry.videoUrl)))
+                        }
+                    }) {
+                        Text("開啟教學影片")
+                    }
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ChoiceButton("計時", mode == TrainingMode.Time) { applyPlan(nextMode = TrainingMode.Time) }
                     ChoiceButton("次數", mode == TrainingMode.Reps) { applyPlan(nextMode = TrainingMode.Reps) }
