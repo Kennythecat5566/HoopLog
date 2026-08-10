@@ -820,12 +820,7 @@ private fun TagDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(name, { name = it }, label = { Text("標籤名稱") }, singleLine = true)
-                Text("顏色", style = MaterialTheme.typography.bodySmall)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(cardColorChoices, key = { it }) { color ->
-                        ColorChoice(color, colorHex == color) { colorHex = color }
-                    }
-                }
+                ColorPicker(label = "顏色", colorHex = colorHex, onColorChange = { colorHex = it })
                 OutlinedTextField(
                     value = priority,
                     onValueChange = { priority = it.filter(Char::isDigit).take(1) },
@@ -889,18 +884,8 @@ private fun AdvancedSettingsDialog(
                     ChoiceButton("Minimal", style == "Minimal") { style = "Minimal" }
                     ChoiceButton("Soft", style == "Soft") { style = "Soft" }
                 }
-                Text("主色", style = MaterialTheme.typography.bodySmall)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(listOf("#111111", "#2563EB", "#047857", "#7C3AED", "#B45309"), key = { it }) { color ->
-                        ColorChoice(color, primary == color) { primary = color }
-                    }
-                }
-                Text("介面底色", style = MaterialTheme.typography.bodySmall)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(listOf("#FFFFFF", "#FAFAFA", "#F7F7F2", "#F8FAFC"), key = { it }) { color ->
-                        ColorChoice(color, surface == color) { surface = color }
-                    }
-                }
+                ColorPicker(label = "主色", colorHex = primary, onColorChange = { primary = it })
+                ColorPicker(label = "介面底色", colorHex = surface, onColorChange = { surface = it })
                 OutlinedTextField(radius, { radius = it.filter(Char::isDigit).take(2) }, label = { Text("卡片弧度 0-16") }, singleLine = true)
                 OutlinedTextField(fontScale, { fontScale = it.filter(Char::isDigit).take(3) }, label = { Text("字體大小 %") }, singleLine = true)
                 OutlinedTextField(densityScale, { densityScale = it.filter(Char::isDigit).take(3) }, label = { Text("介面大小 %") }, singleLine = true)
@@ -966,16 +951,7 @@ private fun ItemDialog(
                         )
                     }
                 }
-                Text("顏色", style = MaterialTheme.typography.bodySmall)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(cardColorChoices, key = { it }) { color ->
-                        ColorChoice(
-                            colorHex = color,
-                            selected = colorHex == color,
-                            onClick = { colorHex = color }
-                        )
-                    }
-                }
+                ColorPicker(label = "顏色", colorHex = colorHex, onColorChange = { colorHex = it })
                 OutlinedTextField(
                     value = priority,
                     onValueChange = { priority = it.filter(Char::isDigit).take(1) },
@@ -1459,6 +1435,62 @@ private fun ColorChoice(
     }
 }
 
+@Composable
+private fun ColorPicker(
+    label: String,
+    colorHex: String,
+    onColorChange: (String) -> Unit
+) {
+    var typed by remember(colorHex) { mutableStateOf(colorHex.normalizeColorInput()) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+            Surface(
+                color = parseColor(colorHex, MaterialTheme.colorScheme.surface),
+                shape = MaterialTheme.shapes.small,
+                tonalElevation = 1.dp,
+                modifier = Modifier.height(32.dp).weight(0.35f)
+            ) {}
+        }
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(cardColorChoices, key = { it }) { color ->
+                ColorChoice(color, colorHex.equals(color, ignoreCase = true)) {
+                    typed = color
+                    onColorChange(color)
+                }
+            }
+        }
+        Text("光譜", style = MaterialTheme.typography.bodySmall)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(spectrumColors, key = { it }) { color ->
+                ColorChoice(color, colorHex.equals(color, ignoreCase = true)) {
+                    typed = color
+                    onColorChange(color)
+                }
+            }
+        }
+        Text("明暗", style = MaterialTheme.typography.bodySmall)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(toneColors(colorHex), key = { it }) { color ->
+                ColorChoice(color, colorHex.equals(color, ignoreCase = true)) {
+                    typed = color
+                    onColorChange(color)
+                }
+            }
+        }
+        OutlinedTextField(
+            value = typed,
+            onValueChange = { value ->
+                typed = value.uppercase().take(7)
+                typed.normalizeColorInput().takeIf { it.isValidColorHex() }?.let(onColorChange)
+            },
+            label = { Text("色碼 #RRGGBB") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
 private fun formatDuration(seconds: Int): String {
     val safeSeconds = seconds.coerceAtLeast(0)
     val minutes = safeSeconds / 60
@@ -1475,6 +1507,22 @@ private val cardColorChoices = listOf(
     "#F2F2F2"
 )
 
+private val spectrumColors = listOf(
+    "#EF4444",
+    "#F97316",
+    "#F59E0B",
+    "#EAB308",
+    "#84CC16",
+    "#22C55E",
+    "#14B8A6",
+    "#06B6D4",
+    "#3B82F6",
+    "#6366F1",
+    "#8B5CF6",
+    "#D946EF",
+    "#EC4899"
+)
+
 private fun parseColor(value: String, fallback: Color): Color =
     runCatching {
         val clean = value.removePrefix("#")
@@ -1484,6 +1532,29 @@ private fun parseColor(value: String, fallback: Color): Color =
             blue = clean.substring(4, 6).toInt(16)
         )
     }.getOrElse { fallback }
+
+private fun String.normalizeColorInput(): String {
+    val raw = trim().uppercase()
+    val withHash = if (raw.startsWith("#")) raw else "#$raw"
+    val digits = withHash.drop(1).filter { it in '0'..'9' || it in 'A'..'F' }.take(6)
+    return "#$digits"
+}
+
+private fun String.isValidColorHex(): Boolean = Regex("^#[0-9A-F]{6}$").matches(this)
+
+private fun toneColors(colorHex: String): List<String> {
+    val base = colorHex.normalizeColorInput().takeIf { it.isValidColorHex() } ?: "#3B82F6"
+    val clean = base.removePrefix("#")
+    val r = clean.substring(0, 2).toInt(16)
+    val g = clean.substring(2, 4).toInt(16)
+    val b = clean.substring(4, 6).toInt(16)
+    return listOf(0.25f, 0.45f, 0.65f, 0.85f, 1.0f).map { mix ->
+        val nr = (255 - ((255 - r) * mix)).toInt().coerceIn(0, 255)
+        val ng = (255 - ((255 - g) * mix)).toInt().coerceIn(0, 255)
+        val nb = (255 - ((255 - b) * mix)).toInt().coerceIn(0, 255)
+        "#%02X%02X%02X".format(nr, ng, nb)
+    }
+}
 
 private fun TagSchedule.label(): String = when (this) {
     TagSchedule.Daily -> "每日"
