@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -56,12 +57,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.time.LocalDate
+import java.time.YearMonth
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -106,7 +109,7 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
             entries = trainingStore.entriesFor(today),
             items = trainingStore.activeItems(),
             summaries = trainingStore.summaries(),
-            historyEntries = selected?.let { trainingStore.entriesFor(it) } ?: emptyList(),
+            historyEntries = selected?.let { trainingStore.entriesFor(it, ensure = false) } ?: emptyList(),
             updateSettings = settingsStore.loadUpdateSettings()
         )
     }
@@ -130,12 +133,12 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
         reload()
     }
 
-    fun saveItem(id: Long?, title: String, tag: String, mode: TrainingMode, durationSeconds: Int, repsPerSet: Int, sets: Int, restSeconds: Int) {
+    fun saveItem(id: Long?, title: String, tag: String, colorHex: String, priority: Int, mode: TrainingMode, durationSeconds: Int, repsPerSet: Int, sets: Int, restSeconds: Int) {
         if (title.isBlank()) {
             state = state.copy(message = "請輸入訓練項目")
             return
         }
-        trainingStore.saveItem(id, title, tag, mode, durationSeconds, repsPerSet, sets, restSeconds)
+        trainingStore.saveItem(id, title, tag, colorHex, priority, mode, durationSeconds, repsPerSet, sets, restSeconds)
         reload()
     }
 
@@ -145,7 +148,7 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun selectHistory(date: String) {
-        state = state.copy(selectedHistory = date, historyEntries = trainingStore.entriesFor(date))
+        state = state.copy(selectedHistory = date, historyEntries = trainingStore.entriesFor(date, ensure = false))
     }
 
     fun saveUpdateSettings(owner: String, repo: String) {
@@ -221,8 +224,8 @@ fun HoopLogApp(vm: HoopLogViewModel = viewModel()) {
                         ItemDialog(
                             item = editing,
                             onDismiss = { showDialog = false },
-                            onSave = { title, tag, mode, duration, reps, sets, rest ->
-                                vm.saveItem(editing?.id, title, tag, mode, duration, reps, sets, rest)
+                            onSave = { title, tag, color, priority, mode, duration, reps, sets, rest ->
+                                vm.saveItem(editing?.id, title, tag, color, priority, mode, duration, reps, sets, rest)
                                 showDialog = false
                             }
                         )
@@ -269,7 +272,7 @@ private fun TodayScreen(
     state: UiState,
     onToggle: (DailyEntry, Boolean) -> Unit,
     onUpdateEntryPlan: (DailyEntry, TrainingMode, Int, Int, Int, Int, Int?, List<TrainingSetPlan>?) -> Unit,
-    onSaveItem: (Long?, String, String, TrainingMode, Int, Int, Int, Int) -> Unit,
+    onSaveItem: (Long?, String, String, String, Int, TrainingMode, Int, Int, Int, Int) -> Unit,
     onArchiveItem: (Long) -> Unit
 ) {
     val entries = state.entries
@@ -277,7 +280,7 @@ private fun TodayScreen(
     val tags = remember(entries) { listOf("全部") + entries.map { it.tag }.distinct().sorted() }
     val visibleEntries = entries
         .filter { selectedTag == "全部" || it.tag == selectedTag }
-        .sortedWith(compareBy<DailyEntry> { it.tag }.thenBy { it.title })
+        .sortedWith(compareBy<DailyEntry> { it.priority }.thenBy { it.tag }.thenBy { it.title })
     val completed = entries.count { it.completed }
     var timerEntry by remember { mutableStateOf<DailyEntry?>(null) }
     var editing by remember { mutableStateOf<TrainingItem?>(null) }
@@ -290,6 +293,7 @@ private fun TodayScreen(
                 ChoiceButton(
                     text = tag,
                     selected = selectedTag == tag,
+                    compact = true,
                     onClick = { selectedTag = tag }
                 )
             }
@@ -300,12 +304,13 @@ private fun TodayScreen(
                 TrainingRow(
                     title = entry.title,
                     detail = entry.planDetail(),
+                    colorHex = entry.colorHex,
                     checked = entry.completed,
                     onChecked = { onToggle(entry, it) },
                     onClick = { timerEntry = entry },
                     onEdit = {
                         editing = state.items.firstOrNull { it.id == entry.itemId }
-                            ?: TrainingItem(entry.itemId, entry.title, entry.tag, entry.mode, entry.durationSeconds, entry.repsPerSet, entry.sets, entry.restSeconds)
+                            ?: TrainingItem(entry.itemId, entry.title, entry.tag, entry.colorHex, entry.priority, entry.mode, entry.durationSeconds, entry.repsPerSet, entry.sets, entry.restSeconds)
                     },
                     onDelete = { onArchiveItem(entry.itemId) }
                 )
@@ -331,8 +336,8 @@ private fun TodayScreen(
         ItemDialog(
             item = item,
             onDismiss = { editing = null },
-            onSave = { title, tag, mode, duration, reps, sets, rest ->
-                onSaveItem(item.id, title, tag, mode, duration, reps, sets, rest)
+            onSave = { title, tag, color, priority, mode, duration, reps, sets, rest ->
+                onSaveItem(item.id, title, tag, color, priority, mode, duration, reps, sets, rest)
                 editing = null
             }
         )
@@ -344,6 +349,7 @@ private fun TodayScreen(
 private fun TrainingRow(
     title: String,
     detail: String,
+    colorHex: String,
     checked: Boolean,
     onChecked: (Boolean) -> Unit,
     onClick: () -> Unit,
@@ -354,6 +360,8 @@ private fun TrainingRow(
     Box(Modifier.fillMaxWidth()) {
         Surface(
             tonalElevation = 1.dp,
+            color = parseColor(colorHex, MaterialTheme.colorScheme.surface),
+            shape = RoundedCornerShape(8.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .combinedClickable(
@@ -385,30 +393,70 @@ private fun TrainingRow(
 
 @Composable
 private fun HistoryScreen(state: UiState, onSelect: (String) -> Unit) {
+    var month by remember { mutableStateOf(YearMonth.now()) }
+    val summaries = remember(state.summaries) { state.summaries.associateBy { it.date } }
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(state.summaries, key = { it.date }) { summary ->
-                Surface(tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth().clickable { onSelect(summary.date) }) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(summary.date, style = MaterialTheme.typography.titleMedium)
-                        Spacer(Modifier.weight(1f))
-                        Text("${summary.completed} / ${summary.total}", style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-            }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { month = month.minusMonths(1) }) { Text("<") }
+            Text("${month.year}-${month.monthValue.toString().padStart(2, '0')}", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+            TextButton(onClick = { month = month.plusMonths(1) }) { Text(">") }
         }
+        CalendarMonth(month, summaries, onSelect)
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item {
-                Text(state.selectedHistory ?: "選擇日期", style = MaterialTheme.typography.titleLarge)
+                Text(state.selectedHistory ?: "選擇日期", style = MaterialTheme.typography.titleMedium)
             }
             items(state.historyEntries, key = { it.id }) { entry ->
                 TrainingRow(
                     title = entry.title,
                     detail = "${entry.completedSets}/${entry.sets} 組 · ${entry.planDetail()}",
+                    colorHex = entry.colorHex,
                     checked = entry.completed,
                     onChecked = {},
                     onClick = {}
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CalendarMonth(
+    month: YearMonth,
+    summaries: Map<String, DaySummary>,
+    onSelect: (String) -> Unit
+) {
+    val firstDay = month.atDay(1)
+    val leadingBlanks = firstDay.dayOfWeek.value % 7
+    val cells = List(leadingBlanks) { null } + (1..month.lengthOfMonth()).map { month.atDay(it) }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+            listOf("日", "一", "二", "三", "四", "五", "六").forEach {
+                Text(it, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        cells.chunked(7).forEach { week ->
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                week.forEach { date ->
+                    val summary = date?.let { summaries[it.toString()] }
+                    Surface(
+                        tonalElevation = if (summary == null) 0.dp else 1.dp,
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (summary == null) MaterialTheme.colorScheme.surface else Color(0xFFEAF7EE),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(56.dp)
+                            .clickable(enabled = date != null) { date?.let { onSelect(it.toString()) } }
+                    ) {
+                        Column(Modifier.padding(6.dp), verticalArrangement = Arrangement.SpaceBetween) {
+                            Text(date?.dayOfMonth?.toString() ?: "", style = MaterialTheme.typography.bodySmall)
+                            Text(summary?.let { "${it.completed}/${it.total}" } ?: "", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+                repeat(7 - week.size) {
+                    Spacer(Modifier.weight(1f).height(56.dp))
+                }
             }
         }
     }
@@ -474,8 +522,8 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
         ItemDialog(
             item = editItem,
             onDismiss = { showDialog = false },
-            onSave = { title, tag, mode, duration, reps, sets, rest ->
-                vm.saveItem(editItem?.id, title, tag, mode, duration, reps, sets, rest)
+            onSave = { title, tag, color, priority, mode, duration, reps, sets, rest ->
+                vm.saveItem(editItem?.id, title, tag, color, priority, mode, duration, reps, sets, rest)
                 showDialog = false
             }
         )
@@ -493,6 +541,8 @@ private fun EditableItemRow(
     Box(Modifier.fillMaxWidth()) {
         Surface(
             tonalElevation = 1.dp,
+            color = parseColor(item.colorHex, MaterialTheme.colorScheme.surface),
+            shape = RoundedCornerShape(8.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .combinedClickable(
@@ -521,10 +571,12 @@ private fun EditableItemRow(
 private fun ItemDialog(
     item: TrainingItem?,
     onDismiss: () -> Unit,
-    onSave: (String, String, TrainingMode, Int, Int, Int, Int) -> Unit
+    onSave: (String, String, String, Int, TrainingMode, Int, Int, Int, Int) -> Unit
 ) {
     var title by remember(item) { mutableStateOf(item?.title ?: "") }
     var tag by remember(item) { mutableStateOf(item?.tag ?: "每日訓練") }
+    var colorHex by remember(item) { mutableStateOf(item?.colorHex ?: "#F4F1FF") }
+    var priority by remember(item) { mutableStateOf((item?.priority ?: 3).toString()) }
     var mode by remember(item) { mutableStateOf(item?.mode ?: TrainingMode.Time) }
     var duration by remember(item) { mutableStateOf(((item?.durationSeconds ?: 600) / 60).coerceAtLeast(1).toString()) }
     var reps by remember(item) { mutableStateOf((item?.repsPerSet ?: 10).toString()) }
@@ -543,10 +595,28 @@ private fun ItemDialog(
                         ChoiceButton(
                             text = preset,
                             selected = tag == preset,
+                            compact = true,
                             onClick = { tag = preset }
                         )
                     }
                 }
+                Text("顏色", style = MaterialTheme.typography.bodySmall)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(cardColorChoices, key = { it }) { color ->
+                        ColorChoice(
+                            colorHex = color,
+                            selected = colorHex == color,
+                            onClick = { colorHex = color }
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = priority,
+                    onValueChange = { priority = it.filter(Char::isDigit).take(1) },
+                    label = { Text("Priority 1-5") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ChoiceButton("計時", mode == TrainingMode.Time) { mode = TrainingMode.Time }
                     ChoiceButton("次數", mode == TrainingMode.Reps) { mode = TrainingMode.Reps }
@@ -590,6 +660,8 @@ private fun ItemDialog(
                     onSave(
                         title,
                         tag,
+                        colorHex,
+                        priority.toIntOrNull()?.coerceIn(1, 5) ?: 3,
                         mode,
                         (duration.toIntOrNull() ?: 1) * 60,
                         reps.toIntOrNull() ?: 1,
@@ -865,7 +937,7 @@ private fun SetCard(
     onStartPause: () -> Unit,
     onComplete: () -> Unit
 ) {
-    Surface(tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
+    Surface(tonalElevation = 1.dp, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -958,16 +1030,36 @@ private fun CounterControl(
 private fun ChoiceButton(
     text: String,
     selected: Boolean,
+    compact: Boolean = false,
     onClick: () -> Unit
 ) {
     Button(
         onClick = onClick,
+        shape = RoundedCornerShape(8.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
             contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
         )
     ) {
-        Text(if (selected) "✓ $text" else text)
+        Text(if (selected) "✓ $text" else text, style = if (compact) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun ColorChoice(
+    colorHex: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Button(
+        onClick = onClick,
+        shape = RoundedCornerShape(8.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = parseColor(colorHex, MaterialTheme.colorScheme.surface),
+            contentColor = Color(0xFF111111)
+        )
+    ) {
+        Text(if (selected) "✓" else " ")
     }
 }
 
@@ -977,6 +1069,25 @@ private fun formatDuration(seconds: Int): String {
     val remainder = safeSeconds % 60
     return "%02d:%02d".format(minutes, remainder)
 }
+
+private val cardColorChoices = listOf(
+    "#F4F1FF",
+    "#EAF7EE",
+    "#FFF3D8",
+    "#EAF3FF",
+    "#FCECEC",
+    "#F2F2F2"
+)
+
+private fun parseColor(value: String, fallback: Color): Color =
+    runCatching {
+        val clean = value.removePrefix("#")
+        Color(
+            red = clean.substring(0, 2).toInt(16),
+            green = clean.substring(2, 4).toInt(16),
+            blue = clean.substring(4, 6).toInt(16)
+        )
+    }.getOrElse { fallback }
 
 private fun DailyEntry.planDetail(): String = when (mode) {
     TrainingMode.Time -> "$tag · 計時 · 每組 ${formatDuration(durationSeconds)} · ${sets} 組 · 休息 ${restSeconds} 秒"

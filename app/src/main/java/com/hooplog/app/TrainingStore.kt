@@ -8,7 +8,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDate
 
-class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", null, 5) {
+class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", null, 6) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -16,6 +16,8 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
                 tag TEXT NOT NULL DEFAULT '每日訓練',
+                color_hex TEXT NOT NULL DEFAULT '#F4F1FF',
+                priority INTEGER NOT NULL DEFAULT 3,
                 mode TEXT NOT NULL DEFAULT 'time',
                 duration_seconds INTEGER NOT NULL DEFAULT 600,
                 reps_per_set INTEGER NOT NULL DEFAULT 10,
@@ -34,6 +36,8 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                 item_id INTEGER NOT NULL,
                 title TEXT NOT NULL,
                 tag TEXT NOT NULL DEFAULT '每日訓練',
+                color_hex TEXT NOT NULL DEFAULT '#F4F1FF',
+                priority INTEGER NOT NULL DEFAULT 3,
                 mode TEXT NOT NULL DEFAULT 'time',
                 duration_seconds INTEGER NOT NULL DEFAULT 600,
                 reps_per_set INTEGER NOT NULL DEFAULT 10,
@@ -71,11 +75,17 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
             db.execSQL("ALTER TABLE items ADD COLUMN tag TEXT NOT NULL DEFAULT '每日訓練'")
             db.execSQL("ALTER TABLE daily_entries ADD COLUMN tag TEXT NOT NULL DEFAULT '每日訓練'")
         }
+        if (oldVersion < 6) {
+            db.execSQL("ALTER TABLE items ADD COLUMN color_hex TEXT NOT NULL DEFAULT '#F4F1FF'")
+            db.execSQL("ALTER TABLE items ADD COLUMN priority INTEGER NOT NULL DEFAULT 3")
+            db.execSQL("ALTER TABLE daily_entries ADD COLUMN color_hex TEXT NOT NULL DEFAULT '#F4F1FF'")
+            db.execSQL("ALTER TABLE daily_entries ADD COLUMN priority INTEGER NOT NULL DEFAULT 3")
+        }
     }
 
     fun activeItems(): List<TrainingItem> = readableDatabase.query(
         "items",
-        arrayOf("id", "title", "tag", "mode", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "active"),
+        arrayOf("id", "title", "tag", "color_hex", "priority", "mode", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "active"),
         "active = 1",
         null,
         null,
@@ -89,22 +99,26 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                             id = cursor.getLong(0),
                             title = cursor.getString(1),
                             tag = cursor.getString(2),
-                            mode = cursor.getString(3).toTrainingMode(),
-                            durationSeconds = cursor.getInt(4),
-                            repsPerSet = cursor.getInt(5),
-                            sets = cursor.getInt(6),
-                            restSeconds = cursor.getInt(7),
-                            active = cursor.getInt(8) == 1
+                            colorHex = cursor.getString(3),
+                            priority = cursor.getInt(4),
+                            mode = cursor.getString(5).toTrainingMode(),
+                            durationSeconds = cursor.getInt(6),
+                            repsPerSet = cursor.getInt(7),
+                            sets = cursor.getInt(8),
+                            restSeconds = cursor.getInt(9),
+                            active = cursor.getInt(10) == 1
                     )
                 )
             }
         }
     }
 
-    fun saveItem(id: Long?, title: String, tag: String, mode: TrainingMode, durationSeconds: Int, repsPerSet: Int, sets: Int, restSeconds: Int) {
+    fun saveItem(id: Long?, title: String, tag: String, colorHex: String, priority: Int, mode: TrainingMode, durationSeconds: Int, repsPerSet: Int, sets: Int, restSeconds: Int) {
         val values = ContentValues().apply {
             put("title", title.trim())
             put("tag", tag.cleanTag())
+            put("color_hex", colorHex.cleanColorHex())
+            put("priority", priority.coerceIn(1, 5))
             put("mode", mode.dbValue)
             put("duration_seconds", durationSeconds.coerceAtLeast(1))
             put("reps_per_set", repsPerSet.coerceAtLeast(1))
@@ -123,6 +137,8 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                 ContentValues().apply {
                     put("title", title.trim())
                     put("tag", tag.cleanTag())
+                    put("color_hex", colorHex.cleanColorHex())
+                    put("priority", priority.coerceIn(1, 5))
                     put("mode", mode.dbValue)
                     put("duration_seconds", durationSeconds.coerceAtLeast(1))
                     put("reps_per_set", repsPerSet.coerceAtLeast(1))
@@ -153,6 +169,8 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                 put("item_id", item.id)
                 put("title", item.title)
                 put("tag", item.tag)
+                put("color_hex", item.colorHex)
+                put("priority", item.priority)
                 put("mode", item.mode.dbValue)
                 put("duration_seconds", item.durationSeconds)
                 put("reps_per_set", item.repsPerSet)
@@ -163,11 +181,11 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
         }
     }
 
-    fun entriesFor(date: String): List<DailyEntry> {
-        ensureEntriesFor(date)
+    fun entriesFor(date: String, ensure: Boolean = true): List<DailyEntry> {
+        if (ensure) ensureEntriesFor(date)
         return readableDatabase.query(
             "daily_entries",
-            arrayOf("id", "date", "item_id", "title", "tag", "mode", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "completed_sets", "set_plans", "completed", "completed_at"),
+            arrayOf("id", "date", "item_id", "title", "tag", "color_hex", "priority", "mode", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "completed_sets", "set_plans", "completed", "completed_at"),
             "date = ?",
             arrayOf(date),
             null,
@@ -183,22 +201,24 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                             itemId = cursor.getLong(2),
                             title = cursor.getString(3),
                             tag = cursor.getString(4),
-                            mode = cursor.getString(5).toTrainingMode(),
-                            durationSeconds = cursor.getInt(6),
-                            repsPerSet = cursor.getInt(7),
-                            sets = cursor.getInt(8),
-                            restSeconds = cursor.getInt(9),
-                            completedSets = cursor.getInt(10),
+                            colorHex = cursor.getString(5),
+                            priority = cursor.getInt(6),
+                            mode = cursor.getString(7).toTrainingMode(),
+                            durationSeconds = cursor.getInt(8),
+                            repsPerSet = cursor.getInt(9),
+                            sets = cursor.getInt(10),
+                            restSeconds = cursor.getInt(11),
+                            completedSets = cursor.getInt(12),
                             setPlans = parseSetPlans(
-                                json = if (cursor.isNull(11)) null else cursor.getString(11),
-                                mode = cursor.getString(5).toTrainingMode(),
-                                durationSeconds = cursor.getInt(6),
-                                repsPerSet = cursor.getInt(7),
-                                sets = cursor.getInt(8),
-                                completedSets = cursor.getInt(10)
+                                json = if (cursor.isNull(13)) null else cursor.getString(13),
+                                mode = cursor.getString(7).toTrainingMode(),
+                                durationSeconds = cursor.getInt(8),
+                                repsPerSet = cursor.getInt(9),
+                                sets = cursor.getInt(10),
+                                completedSets = cursor.getInt(12)
                             ),
-                            completed = cursor.getInt(12) == 1,
-                            completedAt = if (cursor.isNull(13)) null else cursor.getLong(13)
+                            completed = cursor.getInt(14) == 1,
+                            completedAt = if (cursor.isNull(15)) null else cursor.getLong(15)
                         )
                     )
                 }
@@ -281,15 +301,17 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
 
     private fun seed(db: SQLiteDatabase) {
         listOf(
-            TrainingItem(0, "運球手感", "每日訓練", TrainingMode.Time, 600, 10, 4, 45),
-            TrainingItem(0, "定點投籃", "每日訓練", TrainingMode.Reps, 60, 20, 5, 60),
-            TrainingItem(0, "上籃腳步", "每周訓練", TrainingMode.Reps, 60, 12, 4, 45),
-            TrainingItem(0, "罰球", "每日訓練", TrainingMode.Reps, 60, 10, 3, 30),
-            TrainingItem(0, "核心與伸展", "特化訓練", TrainingMode.Time, 600, 10, 3, 60)
+            TrainingItem(0, "運球手感", "每日訓練", "#F4F1FF", 1, TrainingMode.Time, 600, 10, 4, 45),
+            TrainingItem(0, "定點投籃", "每日訓練", "#EAF7EE", 1, TrainingMode.Reps, 60, 20, 5, 60),
+            TrainingItem(0, "上籃腳步", "每周訓練", "#FFF3D8", 2, TrainingMode.Reps, 60, 12, 4, 45),
+            TrainingItem(0, "罰球", "每日訓練", "#EAF3FF", 2, TrainingMode.Reps, 60, 10, 3, 30),
+            TrainingItem(0, "核心與伸展", "特化訓練", "#FCECEC", 3, TrainingMode.Time, 600, 10, 3, 60)
         ).forEachIndexed { index, item ->
             db.insert("items", null, ContentValues().apply {
                 put("title", item.title)
                 put("tag", item.tag)
+                put("color_hex", item.colorHex)
+                put("priority", item.priority)
                 put("mode", item.mode.dbValue)
                 put("duration_seconds", item.durationSeconds)
                 put("reps_per_set", item.repsPerSet)
@@ -383,3 +405,8 @@ private fun List<TrainingSetPlan>.toJson(): String {
 }
 
 private fun String.cleanTag(): String = trim().ifBlank { "每日訓練" }
+
+private fun String.cleanColorHex(): String {
+    val value = trim()
+    return if (Regex("^#[0-9A-Fa-f]{6}$").matches(value)) value.uppercase() else "#F4F1FF"
+}
