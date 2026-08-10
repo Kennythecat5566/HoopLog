@@ -80,6 +80,7 @@ class MainActivity : ComponentActivity() {
 data class UiState(
     val today: String = LocalDate.now().toString(),
     val entries: List<DailyEntry> = emptyList(),
+    val weekEntries: Map<String, List<DailyEntry>> = emptyMap(),
     val items: List<TrainingItem> = emptyList(),
     val summaries: List<DaySummary> = emptyList(),
     val selectedHistory: String? = null,
@@ -105,11 +106,16 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
 
     fun reload() {
         val today = LocalDate.now().toString()
+        val weekDates = LocalDate.now().weekDates()
         trainingStore.ensureEntriesFor(today)
         val selected = state.selectedHistory
         state = state.copy(
             today = today,
             entries = trainingStore.entriesFor(today),
+            weekEntries = weekDates.associate { date ->
+                val key = date.toString()
+                key to trainingStore.entriesFor(key)
+            },
             items = trainingStore.activeItems(),
             summaries = trainingStore.summaries(),
             historyEntries = selected?.let { trainingStore.entriesFor(it, ensure = false) } ?: emptyList(),
@@ -302,6 +308,8 @@ private fun AppBar(screen: Screen) {
     )
 }
 
+private enum class HomeMode { Day, Week }
+
 @Composable
 private fun TodayScreen(
     state: UiState,
@@ -311,6 +319,7 @@ private fun TodayScreen(
     onArchiveItem: (Long) -> Unit
 ) {
     val entries = state.entries
+    var homeMode by remember { mutableStateOf(HomeMode.Day) }
     var selectedTag by remember { mutableStateOf("全部") }
     val tags = remember(entries) { listOf("全部") + entries.map { it.tag }.distinct().sorted() }
     val visibleEntries = entries
@@ -323,6 +332,11 @@ private fun TodayScreen(
         Text("$completed / ${entries.size}", style = MaterialTheme.typography.displaySmall)
         Text("今日完成", style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ChoiceButton("本日", homeMode == HomeMode.Day) { homeMode = HomeMode.Day }
+            ChoiceButton("本周", homeMode == HomeMode.Week) { homeMode = HomeMode.Week }
+        }
+        Spacer(Modifier.height(12.dp))
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             items(tags, key = { it }) { tag ->
                 ChoiceButton(
@@ -334,22 +348,30 @@ private fun TodayScreen(
             }
         }
         Spacer(Modifier.height(16.dp))
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(visibleEntries, key = { it.id }) { entry ->
-                TrainingRow(
-                    title = entry.title,
-                    detail = entry.planDetail(),
-                    colorHex = entry.colorHex,
-                    checked = entry.completed,
-                    onChecked = { onToggle(entry, it) },
-                    onClick = { timerEntry = entry },
-                    onEdit = {
-                        editing = state.items.firstOrNull { it.id == entry.itemId }
-                            ?: TrainingItem(entry.itemId, entry.title, entry.tag, entry.colorHex, entry.priority, entry.mode, entry.durationSeconds, entry.repsPerSet, entry.sets, entry.restSeconds)
-                    },
-                    onDelete = { onArchiveItem(entry.itemId) }
-                )
+        if (homeMode == HomeMode.Day) {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(visibleEntries, key = { it.id }) { entry ->
+                    TrainingRow(
+                        title = entry.title,
+                        detail = entry.planDetail(),
+                        colorHex = entry.colorHex,
+                        checked = entry.completed,
+                        onChecked = { onToggle(entry, it) },
+                        onClick = { timerEntry = entry },
+                        onEdit = {
+                            editing = state.items.firstOrNull { it.id == entry.itemId }
+                                ?: TrainingItem(entry.itemId, entry.title, entry.tag, entry.colorHex, entry.priority, entry.mode, entry.durationSeconds, entry.repsPerSet, entry.sets, entry.restSeconds)
+                        },
+                        onDelete = { onArchiveItem(entry.itemId) }
+                    )
+                }
             }
+        } else {
+            WeekOverview(
+                today = LocalDate.parse(state.today),
+                weekEntries = state.weekEntries,
+                selectedTag = selectedTag
+            )
         }
     }
 
@@ -375,6 +397,80 @@ private fun TodayScreen(
             onSave = { title, tag, color, priority, mode, duration, reps, sets, rest ->
                 onSaveItem(item.id, title, tag, color, priority, mode, duration, reps, sets, rest)
                 editing = null
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun WeekOverview(
+    today: LocalDate,
+    weekEntries: Map<String, List<DailyEntry>>,
+    selectedTag: String
+) {
+    var detailDate by remember { mutableStateOf<LocalDate?>(null) }
+    val dates = remember(today) { today.weekDates() }
+
+    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(dates, key = { it.toString() }) { date ->
+            val entries = weekEntries[date.toString()].orEmpty()
+                .filter { selectedTag == "全部" || it.tag == selectedTag }
+                .sortedWith(compareBy<DailyEntry> { it.priority }.thenBy { it.tag }.thenBy { it.title })
+            val completed = entries.count { it.completed }
+            val isToday = date == today
+            Surface(
+                tonalElevation = if (isToday) 5.dp else 1.dp,
+                color = if (isToday) Color(0xFFEAF3FF) else MaterialTheme.colorScheme.surface,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .combinedClickable(
+                        onClick = { detailDate = date },
+                        onLongClick = { detailDate = date }
+                    )
+            ) {
+                Row(Modifier.padding(if (isToday) 16.dp else 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "${weekdayLabel(date.dayOfWeek.value)} ${date.monthValue}/${date.dayOfMonth}",
+                            style = if (isToday) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            if (entries.isEmpty()) "無訓練" else "$completed / ${entries.size} 完成",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    if (isToday) {
+                        Text("今天", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+        }
+    }
+
+    detailDate?.let { date ->
+        val entries = weekEntries[date.toString()].orEmpty()
+            .filter { selectedTag == "全部" || it.tag == selectedTag }
+            .sortedWith(compareBy<DailyEntry> { it.priority }.thenBy { it.tag }.thenBy { it.title })
+        AlertDialog(
+            onDismissRequest = { detailDate = null },
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+            title = { Text("${weekdayLabel(date.dayOfWeek.value)} ${date}") },
+            text = {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (entries.isEmpty()) {
+                        item { Text("這天沒有訓練") }
+                    } else {
+                        items(entries, key = { it.id }) { entry ->
+                            Text("${if (entry.completed) "✓" else "□"} ${entry.title} · ${entry.completedSets}/${entry.sets} 組", style = MaterialTheme.typography.bodyMedium)
+                            Text(entry.planDetail(), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { detailDate = null }) { Text("關閉") }
             }
         )
     }
@@ -1353,6 +1449,11 @@ private fun weekdayLabel(day: Int): String = when (day.coerceIn(1, 7)) {
     5 -> "週五"
     6 -> "週六"
     else -> "週日"
+}
+
+private fun LocalDate.weekDates(): List<LocalDate> {
+    val monday = minusDays((dayOfWeek.value - 1).toLong())
+    return List(7) { monday.plusDays(it.toLong()) }
 }
 
 private fun DailyEntry.planDetail(): String = when (mode) {
