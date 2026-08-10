@@ -8,6 +8,7 @@ enum class TrainingMode {
 data class TrainingItem(
     val id: Long,
     val title: String,
+    val tag: String,
     val mode: TrainingMode,
     val durationSeconds: Int,
     val repsPerSet: Int,
@@ -28,6 +29,7 @@ data class DailyEntry(
     val date: String,
     val itemId: Long,
     val title: String,
+    val tag: String,
     val mode: TrainingMode,
     val durationSeconds: Int,
     val repsPerSet: Int,

@@ -12,13 +12,26 @@ android {
         applicationId = "com.hooplog.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.1.4"
+        versionCode = 6
+        versionName = "0.1.5"
+    }
+
+    signingConfigs {
+        create("hooplog") {
+            storeFile = file("keystore/hooplog-upload.jks")
+            storePassword = "hooplogpass"
+            keyAlias = "hooplog"
+            keyPassword = "hooplogpass"
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("hooplog")
+        }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("hooplog")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

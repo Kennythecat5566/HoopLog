@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -128,12 +130,12 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
         reload()
     }
 
-    fun saveItem(id: Long?, title: String, mode: TrainingMode, durationSeconds: Int, repsPerSet: Int, sets: Int, restSeconds: Int) {
+    fun saveItem(id: Long?, title: String, tag: String, mode: TrainingMode, durationSeconds: Int, repsPerSet: Int, sets: Int, restSeconds: Int) {
         if (title.isBlank()) {
             state = state.copy(message = "請輸入訓練項目")
             return
         }
-        trainingStore.saveItem(id, title, mode, durationSeconds, repsPerSet, sets, restSeconds)
+        trainingStore.saveItem(id, title, tag, mode, durationSeconds, repsPerSet, sets, restSeconds)
         reload()
     }
 
@@ -219,8 +221,8 @@ fun HoopLogApp(vm: HoopLogViewModel = viewModel()) {
                         ItemDialog(
                             item = editing,
                             onDismiss = { showDialog = false },
-                            onSave = { title, mode, duration, reps, sets, rest ->
-                                vm.saveItem(editing?.id, title, mode, duration, reps, sets, rest)
+                            onSave = { title, tag, mode, duration, reps, sets, rest ->
+                                vm.saveItem(editing?.id, title, tag, mode, duration, reps, sets, rest)
                                 showDialog = false
                             }
                         )
@@ -267,19 +269,34 @@ private fun TodayScreen(
     state: UiState,
     onToggle: (DailyEntry, Boolean) -> Unit,
     onUpdateEntryPlan: (DailyEntry, TrainingMode, Int, Int, Int, Int, Int?, List<TrainingSetPlan>?) -> Unit,
-    onSaveItem: (Long?, String, TrainingMode, Int, Int, Int, Int) -> Unit,
+    onSaveItem: (Long?, String, String, TrainingMode, Int, Int, Int, Int) -> Unit,
     onArchiveItem: (Long) -> Unit
 ) {
     val entries = state.entries
+    var selectedTag by remember { mutableStateOf("全部") }
+    val tags = remember(entries) { listOf("全部") + entries.map { it.tag }.distinct().sorted() }
+    val visibleEntries = entries
+        .filter { selectedTag == "全部" || it.tag == selectedTag }
+        .sortedWith(compareBy<DailyEntry> { it.tag }.thenBy { it.title })
     val completed = entries.count { it.completed }
     var timerEntry by remember { mutableStateOf<DailyEntry?>(null) }
     var editing by remember { mutableStateOf<TrainingItem?>(null) }
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         Text("$completed / ${entries.size}", style = MaterialTheme.typography.displaySmall)
         Text("今日完成", style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(12.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(tags, key = { it }) { tag ->
+                ChoiceButton(
+                    text = tag,
+                    selected = selectedTag == tag,
+                    onClick = { selectedTag = tag }
+                )
+            }
+        }
         Spacer(Modifier.height(16.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(entries, key = { it.id }) { entry ->
+            items(visibleEntries, key = { it.id }) { entry ->
                 TrainingRow(
                     title = entry.title,
                     detail = entry.planDetail(),
@@ -288,7 +305,7 @@ private fun TodayScreen(
                     onClick = { timerEntry = entry },
                     onEdit = {
                         editing = state.items.firstOrNull { it.id == entry.itemId }
-                            ?: TrainingItem(entry.itemId, entry.title, entry.mode, entry.durationSeconds, entry.repsPerSet, entry.sets, entry.restSeconds)
+                            ?: TrainingItem(entry.itemId, entry.title, entry.tag, entry.mode, entry.durationSeconds, entry.repsPerSet, entry.sets, entry.restSeconds)
                     },
                     onDelete = { onArchiveItem(entry.itemId) }
                 )
@@ -314,8 +331,8 @@ private fun TodayScreen(
         ItemDialog(
             item = item,
             onDismiss = { editing = null },
-            onSave = { title, mode, duration, reps, sets, rest ->
-                onSaveItem(item.id, title, mode, duration, reps, sets, rest)
+            onSave = { title, tag, mode, duration, reps, sets, rest ->
+                onSaveItem(item.id, title, tag, mode, duration, reps, sets, rest)
                 editing = null
             }
         )
@@ -457,8 +474,8 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
         ItemDialog(
             item = editItem,
             onDismiss = { showDialog = false },
-            onSave = { title, mode, duration, reps, sets, rest ->
-                vm.saveItem(editItem?.id, title, mode, duration, reps, sets, rest)
+            onSave = { title, tag, mode, duration, reps, sets, rest ->
+                vm.saveItem(editItem?.id, title, tag, mode, duration, reps, sets, rest)
                 showDialog = false
             }
         )
@@ -504,9 +521,10 @@ private fun EditableItemRow(
 private fun ItemDialog(
     item: TrainingItem?,
     onDismiss: () -> Unit,
-    onSave: (String, TrainingMode, Int, Int, Int, Int) -> Unit
+    onSave: (String, String, TrainingMode, Int, Int, Int, Int) -> Unit
 ) {
     var title by remember(item) { mutableStateOf(item?.title ?: "") }
+    var tag by remember(item) { mutableStateOf(item?.tag ?: "每日訓練") }
     var mode by remember(item) { mutableStateOf(item?.mode ?: TrainingMode.Time) }
     var duration by remember(item) { mutableStateOf(((item?.durationSeconds ?: 600) / 60).coerceAtLeast(1).toString()) }
     var reps by remember(item) { mutableStateOf((item?.repsPerSet ?: 10).toString()) }
@@ -519,13 +537,19 @@ private fun ItemDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(title, { title = it }, label = { Text("名稱") }, singleLine = true)
+                OutlinedTextField(tag, { tag = it }, label = { Text("標籤") }, singleLine = true)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(listOf("每日訓練", "每周訓練", "特化訓練"), key = { it }) { preset ->
+                        ChoiceButton(
+                            text = preset,
+                            selected = tag == preset,
+                            onClick = { tag = preset }
+                        )
+                    }
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { mode = TrainingMode.Time }, enabled = mode != TrainingMode.Time) {
-                        Text("計時")
-                    }
-                    Button(onClick = { mode = TrainingMode.Reps }, enabled = mode != TrainingMode.Reps) {
-                        Text("次數")
-                    }
+                    ChoiceButton("計時", mode == TrainingMode.Time) { mode = TrainingMode.Time }
+                    ChoiceButton("次數", mode == TrainingMode.Reps) { mode = TrainingMode.Reps }
                 }
                 if (mode == TrainingMode.Time) {
                     OutlinedTextField(
@@ -565,6 +589,7 @@ private fun ItemDialog(
                 onClick = {
                     onSave(
                         title,
+                        tag,
                         mode,
                         (duration.toIntOrNull() ?: 1) * 60,
                         reps.toIntOrNull() ?: 1,
@@ -739,12 +764,8 @@ private fun TrainingTimerDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { applyPlan(nextMode = TrainingMode.Time) }, enabled = mode != TrainingMode.Time) {
-                        Text("計時")
-                    }
-                    Button(onClick = { applyPlan(nextMode = TrainingMode.Reps) }, enabled = mode != TrainingMode.Reps) {
-                        Text("次數")
-                    }
+                    ChoiceButton("計時", mode == TrainingMode.Time) { applyPlan(nextMode = TrainingMode.Time) }
+                    ChoiceButton("次數", mode == TrainingMode.Reps) { applyPlan(nextMode = TrainingMode.Reps) }
                 }
                 CounterControl(
                     label = "組數",
@@ -788,6 +809,12 @@ private fun TrainingTimerDialog(
                             onModeChange = { nextMode -> updateSetPlan(setNumber) { it.copy(mode = nextMode) } },
                             onDurationChange = { nextDuration -> updateSetPlan(setNumber) { it.copy(durationSeconds = nextDuration) } },
                             onRepsChange = { nextReps -> updateSetPlan(setNumber) { it.copy(reps = nextReps) } },
+                            onUndo = {
+                                running = false
+                                isResting = false
+                                val updated = setPlans.markSetIncomplete(setNumber)
+                                applyPlan(nextPlans = updated)
+                            },
                             onStartPause = {
                                 if (plan.mode == TrainingMode.Time) {
                                     activeSet = setNumber
@@ -834,6 +861,7 @@ private fun SetCard(
     onModeChange: (TrainingMode) -> Unit,
     onDurationChange: (Int) -> Unit,
     onRepsChange: (Int) -> Unit,
+    onUndo: () -> Unit,
     onStartPause: () -> Unit,
     onComplete: () -> Unit
 ) {
@@ -856,12 +884,8 @@ private fun SetCard(
             }
             if (!plan.completed) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { onModeChange(TrainingMode.Time) }, enabled = plan.mode != TrainingMode.Time) {
-                        Text("時間")
-                    }
-                    Button(onClick = { onModeChange(TrainingMode.Reps) }, enabled = plan.mode != TrainingMode.Reps) {
-                        Text("次數")
-                    }
+                    ChoiceButton("時間", plan.mode == TrainingMode.Time) { onModeChange(TrainingMode.Time) }
+                    ChoiceButton("次數", plan.mode == TrainingMode.Reps) { onModeChange(TrainingMode.Reps) }
                 }
                 if (plan.mode == TrainingMode.Time) {
                     CounterControl(
@@ -877,6 +901,11 @@ private fun SetCard(
                         onDecrease = { onRepsChange(plan.reps - 1) },
                         onIncrease = { onRepsChange(plan.reps + 1) }
                     )
+                }
+            }
+            if (plan.completed) {
+                TextButton(onClick = onUndo) {
+                    Text("復原本組")
                 }
             }
             if (enabled && plan.mode == TrainingMode.Time) {
@@ -925,6 +954,23 @@ private fun CounterControl(
     }
 }
 
+@Composable
+private fun ChoiceButton(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Button(
+        onClick = onClick,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+            contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+        )
+    ) {
+        Text(if (selected) "✓ $text" else text)
+    }
+}
+
 private fun formatDuration(seconds: Int): String {
     val safeSeconds = seconds.coerceAtLeast(0)
     val minutes = safeSeconds / 60
@@ -933,13 +979,13 @@ private fun formatDuration(seconds: Int): String {
 }
 
 private fun DailyEntry.planDetail(): String = when (mode) {
-    TrainingMode.Time -> "計時 · 每組 ${formatDuration(durationSeconds)} · ${sets} 組 · 休息 ${restSeconds} 秒"
-    TrainingMode.Reps -> "次數 · 每組 ${repsPerSet} 次 · ${sets} 組 · 休息 ${restSeconds} 秒"
+    TrainingMode.Time -> "$tag · 計時 · 每組 ${formatDuration(durationSeconds)} · ${sets} 組 · 休息 ${restSeconds} 秒"
+    TrainingMode.Reps -> "$tag · 次數 · 每組 ${repsPerSet} 次 · ${sets} 組 · 休息 ${restSeconds} 秒"
 }
 
 private fun TrainingItem.planDetail(): String = when (mode) {
-    TrainingMode.Time -> "計時 · 每組 ${formatDuration(durationSeconds)} · ${sets} 組 · 休息 ${restSeconds} 秒"
-    TrainingMode.Reps -> "次數 · 每組 ${repsPerSet} 次 · ${sets} 組 · 休息 ${restSeconds} 秒"
+    TrainingMode.Time -> "$tag · 計時 · 每組 ${formatDuration(durationSeconds)} · ${sets} 組 · 休息 ${restSeconds} 秒"
+    TrainingMode.Reps -> "$tag · 次數 · 每組 ${repsPerSet} 次 · ${sets} 組 · 休息 ${restSeconds} 秒"
 }
 
 private fun DailyEntry.defaultSetPlans(): List<TrainingSetPlan> =
@@ -967,4 +1013,9 @@ private fun List<TrainingSetPlan>.normalizePlans(
 private fun List<TrainingSetPlan>.markSetCompleted(setNumber: Int): List<TrainingSetPlan> =
     mapIndexed { index, plan ->
         if (index == setNumber - 1) plan.copy(completed = true) else plan
+    }
+
+private fun List<TrainingSetPlan>.markSetIncomplete(setNumber: Int): List<TrainingSetPlan> =
+    mapIndexed { index, plan ->
+        if (index == setNumber - 1) plan.copy(completed = false) else plan
     }

@@ -32,3 +32,5 @@ App 的「設定」頁已預設連到：
 - Repo：HoopLog
 
 GitHub Actions 會在推 tag 時自動產生 Release APK。
+
+從 v0.1.5 開始，APK 使用專案固定簽章，後續版本可直接覆蓋安裝。
