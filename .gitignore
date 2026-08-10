@@ -1,0 +1,11 @@
+.gradle/
+.idea/
+local.properties
+build/
+app/build/
+*.iml
+captures/
+gradle-*-bin.zip
+.gradle-bootstrap/
+android-commandlinetools.zip
+.android-sdk/
