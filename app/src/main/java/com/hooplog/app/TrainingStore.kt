@@ -4,9 +4,11 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import org.json.JSONArray
+import org.json.JSONObject
 import java.time.LocalDate
 
-class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", null, 3) {
+class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", null, 4) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -36,6 +38,7 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                 sets INTEGER NOT NULL,
                 rest_seconds INTEGER NOT NULL,
                 completed_sets INTEGER NOT NULL DEFAULT 0,
+                set_plans TEXT,
                 completed INTEGER NOT NULL DEFAULT 0,
                 completed_at INTEGER,
                 UNIQUE(date, item_id)
@@ -58,6 +61,9 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
             db.execSQL("ALTER TABLE daily_entries ADD COLUMN reps_per_set INTEGER NOT NULL DEFAULT 10")
             db.execSQL("ALTER TABLE daily_entries ADD COLUMN completed_sets INTEGER NOT NULL DEFAULT 0")
             db.execSQL("UPDATE daily_entries SET completed_sets = sets WHERE completed = 1")
+        }
+        if (oldVersion < 4) {
+            db.execSQL("ALTER TABLE daily_entries ADD COLUMN set_plans TEXT")
         }
     }
 
@@ -151,7 +157,7 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
         ensureEntriesFor(date)
         return readableDatabase.query(
             "daily_entries",
-            arrayOf("id", "date", "item_id", "title", "mode", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "completed_sets", "completed", "completed_at"),
+            arrayOf("id", "date", "item_id", "title", "mode", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "completed_sets", "set_plans", "completed", "completed_at"),
             "date = ?",
             arrayOf(date),
             null,
@@ -172,8 +178,16 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                             sets = cursor.getInt(7),
                             restSeconds = cursor.getInt(8),
                             completedSets = cursor.getInt(9),
-                            completed = cursor.getInt(10) == 1,
-                            completedAt = if (cursor.isNull(11)) null else cursor.getLong(11)
+                            setPlans = parseSetPlans(
+                                json = if (cursor.isNull(10)) null else cursor.getString(10),
+                                mode = cursor.getString(4).toTrainingMode(),
+                                durationSeconds = cursor.getInt(5),
+                                repsPerSet = cursor.getInt(6),
+                                sets = cursor.getInt(7),
+                                completedSets = cursor.getInt(9)
+                            ),
+                            completed = cursor.getInt(11) == 1,
+                            completedAt = if (cursor.isNull(12)) null else cursor.getLong(12)
                         )
                     )
                 }
@@ -194,15 +208,27 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
         writableDatabase.update("daily_entries", values, "id = ?", arrayOf(id.toString()))
     }
 
-    fun updateEntryPlan(id: Long, mode: TrainingMode, durationSeconds: Int, repsPerSet: Int, sets: Int, restSeconds: Int, completedSets: Int? = null) {
+    fun updateEntryPlan(
+        id: Long,
+        mode: TrainingMode,
+        durationSeconds: Int,
+        repsPerSet: Int,
+        sets: Int,
+        restSeconds: Int,
+        completedSets: Int? = null,
+        setPlans: List<TrainingSetPlan>? = null
+    ) {
         val safeSets = sets.coerceAtLeast(1)
-        val safeCompletedSets = completedSets?.coerceIn(0, safeSets)
+        val safePlans = setPlans?.normalizeSetPlans(mode, durationSeconds, repsPerSet, safeSets)
+        val inferredCompletedSets = safePlans?.count { it.completed }
+        val safeCompletedSets = (inferredCompletedSets ?: completedSets)?.coerceIn(0, safeSets)
         val values = ContentValues().apply {
             put("mode", mode.dbValue)
             put("duration_seconds", durationSeconds.coerceAtLeast(1))
             put("reps_per_set", repsPerSet.coerceAtLeast(1))
             put("sets", safeSets)
             put("rest_seconds", restSeconds.coerceAtLeast(0))
+            safePlans?.let { put("set_plans", it.toJson()) }
             safeCompletedSets?.let {
                 put("completed_sets", it)
                 put("completed", if (it >= safeSets) 1 else 0)
@@ -259,4 +285,73 @@ private val TrainingMode.dbValue: String
 private fun String.toTrainingMode(): TrainingMode = when (this) {
     "reps" -> TrainingMode.Reps
     else -> TrainingMode.Time
+}
+
+private fun parseSetPlans(
+    json: String?,
+    mode: TrainingMode,
+    durationSeconds: Int,
+    repsPerSet: Int,
+    sets: Int,
+    completedSets: Int
+): List<TrainingSetPlan> {
+    if (json.isNullOrBlank()) {
+        return List(sets.coerceAtLeast(1)) { index ->
+            TrainingSetPlan(
+                mode = mode,
+                durationSeconds = durationSeconds.coerceAtLeast(1),
+                reps = repsPerSet.coerceAtLeast(1),
+                completed = index < completedSets
+            )
+        }
+    }
+
+    return runCatching {
+        val array = JSONArray(json)
+        List(array.length()) { index ->
+            val item = array.getJSONObject(index)
+            TrainingSetPlan(
+                mode = item.optString("mode", mode.dbValue).toTrainingMode(),
+                durationSeconds = item.optInt("durationSeconds", durationSeconds).coerceAtLeast(1),
+                reps = item.optInt("reps", repsPerSet).coerceAtLeast(1),
+                completed = item.optBoolean("completed", false)
+            )
+        }.normalizeSetPlans(mode, durationSeconds, repsPerSet, sets)
+    }.getOrElse {
+        List(sets.coerceAtLeast(1)) { index ->
+            TrainingSetPlan(mode, durationSeconds.coerceAtLeast(1), repsPerSet.coerceAtLeast(1), index < completedSets)
+        }
+    }
+}
+
+private fun List<TrainingSetPlan>.normalizeSetPlans(
+    mode: TrainingMode,
+    durationSeconds: Int,
+    repsPerSet: Int,
+    sets: Int
+): List<TrainingSetPlan> {
+    val targetSize = sets.coerceAtLeast(1)
+    val defaults = TrainingSetPlan(mode, durationSeconds.coerceAtLeast(1), repsPerSet.coerceAtLeast(1))
+    return List(targetSize) { index ->
+        getOrNull(index)?.let {
+            it.copy(
+                durationSeconds = it.durationSeconds.coerceAtLeast(1),
+                reps = it.reps.coerceAtLeast(1)
+            )
+        } ?: defaults
+    }
+}
+
+private fun List<TrainingSetPlan>.toJson(): String {
+    val array = JSONArray()
+    forEach { plan ->
+        array.put(
+            JSONObject()
+                .put("mode", plan.mode.dbValue)
+                .put("durationSeconds", plan.durationSeconds)
+                .put("reps", plan.reps)
+                .put("completed", plan.completed)
+        )
+    }
+    return array.toString()
 }

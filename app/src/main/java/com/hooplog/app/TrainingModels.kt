@@ -16,6 +16,13 @@ data class TrainingItem(
     val active: Boolean = true
 )
 
+data class TrainingSetPlan(
+    val mode: TrainingMode,
+    val durationSeconds: Int,
+    val reps: Int,
+    val completed: Boolean = false
+)
+
 data class DailyEntry(
     val id: Long,
     val date: String,
@@ -27,6 +34,7 @@ data class DailyEntry(
     val sets: Int,
     val restSeconds: Int,
     val completedSets: Int,
+    val setPlans: List<TrainingSetPlan>,
     val completed: Boolean,
     val completedAt: Long?
 )
