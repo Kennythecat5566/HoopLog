@@ -114,6 +114,11 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
         reload()
     }
 
+    fun updateEntryPlan(entry: DailyEntry, durationSeconds: Int, sets: Int, restSeconds: Int) {
+        trainingStore.updateEntryPlan(entry.id, durationSeconds, sets, restSeconds)
+        reload()
+    }
+
     fun saveItem(id: Long?, title: String, durationSeconds: Int, sets: Int, restSeconds: Int) {
         if (title.isBlank()) {
             state = state.copy(message = "請輸入訓練項目")
@@ -223,7 +228,7 @@ fun HoopLogApp(vm: HoopLogViewModel = viewModel()) {
                     )
                 }
                 when (screen) {
-                    Screen.Today -> TodayScreen(vm.state, vm::toggle, vm::saveItem, vm::archiveItem)
+                    Screen.Today -> TodayScreen(vm.state, vm::toggle, vm::updateEntryPlan, vm::saveItem, vm::archiveItem)
                     Screen.History -> HistoryScreen(vm.state, vm::selectHistory)
                     Screen.Settings -> SettingsScreen(vm)
                 }
@@ -252,6 +257,7 @@ private fun AppBar(screen: Screen) {
 private fun TodayScreen(
     state: UiState,
     onToggle: (DailyEntry, Boolean) -> Unit,
+    onUpdateEntryPlan: (DailyEntry, Int, Int, Int) -> Unit,
     onSaveItem: (Long?, String, Int, Int, Int) -> Unit,
     onArchiveItem: (Long) -> Unit
 ) {
@@ -267,7 +273,7 @@ private fun TodayScreen(
             items(entries, key = { it.id }) { entry ->
                 TrainingRow(
                     title = entry.title,
-                    detail = "${formatDuration(entry.durationSeconds)} · ${entry.sets} 組 · 休息 ${entry.restSeconds} 秒",
+                    detail = "每組 ${formatDuration(entry.durationSeconds)} · ${entry.sets} 組 · 休息 ${entry.restSeconds} 秒",
                     checked = entry.completed,
                     onChecked = { onToggle(entry, it) },
                     onClick = { timerEntry = entry },
@@ -284,6 +290,7 @@ private fun TodayScreen(
     timerEntry?.let { entry ->
         TrainingTimerDialog(
             entry = entry,
+            onPlanChange = { duration, sets, rest -> onUpdateEntryPlan(entry, duration, sets, rest) },
             onDismiss = { timerEntry = null },
             onFinish = {
                 onToggle(entry, true)
@@ -369,7 +376,7 @@ private fun HistoryScreen(state: UiState, onSelect: (String) -> Unit) {
             items(state.historyEntries, key = { it.id }) { entry ->
                 TrainingRow(
                     title = entry.title,
-                    detail = "${formatDuration(entry.durationSeconds)} · ${entry.sets} 組 · 休息 ${entry.restSeconds} 秒",
+                    detail = "每組 ${formatDuration(entry.durationSeconds)} · ${entry.sets} 組 · 休息 ${entry.restSeconds} 秒",
                     checked = entry.completed,
                     onChecked = {},
                     onClick = {}
@@ -468,7 +475,7 @@ private fun EditableItemRow(
             Column(Modifier.padding(12.dp)) {
                 Text(item.title, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "${formatDuration(item.durationSeconds)} · ${item.sets} 組 · 休息 ${item.restSeconds} 秒",
+                    "每組 ${formatDuration(item.durationSeconds)} · ${item.sets} 組 · 休息 ${item.restSeconds} 秒",
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -502,7 +509,7 @@ private fun ItemDialog(
                 OutlinedTextField(
                     value = duration,
                     onValueChange = { duration = it.filter(Char::isDigit) },
-                    label = { Text("訓練時間（分鐘）") },
+                    label = { Text("每組訓練時間（分鐘）") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                 )
@@ -578,21 +585,61 @@ private fun ItemActionMenu(
 @Composable
 private fun TrainingTimerDialog(
     entry: DailyEntry,
+    onPlanChange: (Int, Int, Int) -> Unit,
     onDismiss: () -> Unit,
     onFinish: () -> Unit
 ) {
-    var remaining by remember(entry.id) { mutableStateOf(entry.durationSeconds.coerceAtLeast(1)) }
+    var workSeconds by remember(entry.id) { mutableStateOf(entry.durationSeconds.coerceAtLeast(1)) }
+    var setCount by remember(entry.id) { mutableStateOf(entry.sets.coerceAtLeast(1)) }
+    var restSeconds by remember(entry.id) { mutableStateOf(entry.restSeconds.coerceAtLeast(0)) }
+    var currentSet by remember(entry.id) { mutableStateOf(1) }
+    var isResting by remember(entry.id) { mutableStateOf(false) }
+    var remaining by remember(entry.id) { mutableStateOf(workSeconds) }
     var running by remember(entry.id) { mutableStateOf(false) }
-    val progress = 1f - remaining.toFloat() / entry.durationSeconds.coerceAtLeast(1).toFloat()
+    val phaseSeconds = if (isResting) restSeconds.coerceAtLeast(1) else workSeconds.coerceAtLeast(1)
+    val progress = 1f - remaining.toFloat() / phaseSeconds.toFloat()
 
     LaunchedEffect(running, remaining) {
         if (running && remaining > 0) {
             delay(1000)
             remaining -= 1
         }
-        if (running && remaining == 0) {
-            onFinish()
+    }
+
+    LaunchedEffect(running, remaining, currentSet, isResting, setCount, restSeconds, workSeconds) {
+        if (!running || remaining > 0) return@LaunchedEffect
+        when {
+            !isResting && currentSet < setCount && restSeconds > 0 -> {
+                isResting = true
+                remaining = restSeconds
+            }
+            !isResting && currentSet < setCount -> {
+                currentSet += 1
+                remaining = workSeconds
+            }
+            isResting && currentSet < setCount -> {
+                isResting = false
+                currentSet += 1
+                remaining = workSeconds
+            }
+            else -> onFinish()
         }
+    }
+
+    fun applyPlan(nextWork: Int = workSeconds, nextSets: Int = setCount, nextRest: Int = restSeconds) {
+        val safeWork = nextWork.coerceAtLeast(5)
+        val safeSets = nextSets.coerceAtLeast(1)
+        val safeRest = nextRest.coerceAtLeast(0)
+        workSeconds = safeWork
+        setCount = safeSets
+        restSeconds = safeRest
+        if (currentSet > safeSets) currentSet = safeSets
+        remaining = if (running) remaining.coerceAtMost(if (isResting) safeRest.coerceAtLeast(1) else safeWork) else if (isResting) safeRest else safeWork
+        if (isResting && safeRest == 0) {
+            isResting = false
+            remaining = safeWork
+        }
+        onPlanChange(safeWork, safeSets, safeRest)
     }
 
     AlertDialog(
@@ -601,6 +648,10 @@ private fun TrainingTimerDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(
+                    if (isResting) "第 $currentSet 組後休息" else "第 $currentSet / $setCount 組",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
                     formatDuration(remaining),
                     style = MaterialTheme.typography.displayMedium
                 )
@@ -608,7 +659,24 @@ private fun TrainingTimerDialog(
                     progress = { progress.coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth()
                 )
-                Text("${entry.sets} 組 · 組間休息 ${entry.restSeconds} 秒")
+                CounterControl(
+                    label = "組數",
+                    value = "${setCount} 組",
+                    onDecrease = { applyPlan(nextSets = (setCount - 1).coerceAtLeast(currentSet)) },
+                    onIncrease = { applyPlan(nextSets = setCount + 1) }
+                )
+                CounterControl(
+                    label = "每組時間",
+                    value = formatDuration(workSeconds),
+                    onDecrease = { applyPlan(nextWork = workSeconds - 30) },
+                    onIncrease = { applyPlan(nextWork = workSeconds + 30) }
+                )
+                CounterControl(
+                    label = "休息時間",
+                    value = formatDuration(restSeconds),
+                    onDecrease = { applyPlan(nextRest = restSeconds - 15) },
+                    onIncrease = { applyPlan(nextRest = restSeconds + 15) }
+                )
             }
         },
         confirmButton = {
@@ -617,7 +685,7 @@ private fun TrainingTimerDialog(
                     Text(
                         when {
                             running -> "暫停"
-                            remaining == entry.durationSeconds -> "開始"
+                            remaining == workSeconds && currentSet == 1 && !isResting -> "開始"
                             else -> "繼續"
                         }
                     )
@@ -633,6 +701,29 @@ private fun TrainingTimerDialog(
             }
         }
     )
+}
+
+@Composable
+private fun CounterControl(
+    label: String,
+    value: String,
+    onDecrease: () -> Unit,
+    onIncrease: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        TextButton(onClick = onDecrease) {
+            Text("-")
+        }
+        Text(value, style = MaterialTheme.typography.titleMedium)
+        TextButton(onClick = onIncrease) {
+            Text("+")
+        }
+    }
 }
 
 private fun formatDuration(seconds: Int): String {

@@ -165,6 +165,15 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
         writableDatabase.update("daily_entries", values, "id = ?", arrayOf(id.toString()))
     }
 
+    fun updateEntryPlan(id: Long, durationSeconds: Int, sets: Int, restSeconds: Int) {
+        val values = ContentValues().apply {
+            put("duration_seconds", durationSeconds.coerceAtLeast(1))
+            put("sets", sets.coerceAtLeast(1))
+            put("rest_seconds", restSeconds.coerceAtLeast(0))
+        }
+        writableDatabase.update("daily_entries", values, "id = ?", arrayOf(id.toString()))
+    }
+
     fun summaries(): List<DaySummary> = readableDatabase.rawQuery(
         """
         SELECT date, SUM(completed), COUNT(*)
