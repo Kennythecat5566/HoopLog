@@ -354,6 +354,51 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
     fun historyEntriesFor(date: String): List<DailyEntry> =
         entriesFor(date, ensure = false).filter { it.completed || it.completedSets > 0 }
 
+    fun completedEntries(): List<DailyEntry> =
+        readableDatabase.query(
+            "daily_entries",
+            arrayOf("id", "date", "item_id", "title", "tag", "color_hex", "priority", "mode", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "completed_sets", "set_plans", "comment", "video_url", "completed", "completed_at"),
+            "completed = 1 OR completed_sets > 0",
+            null,
+            null,
+            null,
+            "date ASC, priority ASC, title ASC"
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(
+                        DailyEntry(
+                            id = cursor.getLong(0),
+                            date = cursor.getString(1),
+                            itemId = cursor.getLong(2),
+                            title = cursor.getString(3),
+                            tag = cursor.getString(4),
+                            colorHex = cursor.getString(5),
+                            priority = cursor.getInt(6),
+                            mode = cursor.getString(7).toTrainingMode(),
+                            durationSeconds = cursor.getInt(8),
+                            repsPerSet = cursor.getInt(9),
+                            sets = cursor.getInt(10),
+                            restSeconds = cursor.getInt(11),
+                            completedSets = cursor.getInt(12),
+                            setPlans = parseSetPlans(
+                                json = if (cursor.isNull(13)) null else cursor.getString(13),
+                                mode = cursor.getString(7).toTrainingMode(),
+                                durationSeconds = cursor.getInt(8),
+                                repsPerSet = cursor.getInt(9),
+                                sets = cursor.getInt(10),
+                                completedSets = cursor.getInt(12)
+                            ),
+                            comment = cursor.getString(14),
+                            videoUrl = cursor.getString(15),
+                            completed = cursor.getInt(16) == 1,
+                            completedAt = if (cursor.isNull(17)) null else cursor.getLong(17)
+                        )
+                    )
+                }
+            }
+        }
+
     fun exportBackup(): String {
         val root = JSONObject()
             .put("schemaVersion", 1)

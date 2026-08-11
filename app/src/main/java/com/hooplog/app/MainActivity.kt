@@ -70,6 +70,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -117,6 +118,7 @@ data class UiState(
     val todaySession: DaySession = DaySession(LocalDate.now().toString(), null, null, 0),
     val selectedHistory: String? = null,
     val historyEntries: List<DailyEntry> = emptyList(),
+    val completedEntries: List<DailyEntry> = emptyList(),
     val tags: List<TrainingTag> = emptyList(),
     val uiSettings: UiSettings = UiSettings(),
     val updateSettings: UpdateSettings = UpdateSettings(),
@@ -154,6 +156,7 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
             summaries = trainingStore.summaries(),
             todaySession = trainingStore.sessionFor(activeDate),
             historyEntries = selected?.let { trainingStore.historyEntriesFor(it) } ?: emptyList(),
+            completedEntries = trainingStore.completedEntries(),
             tags = trainingStore.tags(),
             uiSettings = settingsStore.loadUiSettings(),
             updateSettings = settingsStore.loadUpdateSettings()
@@ -424,6 +427,7 @@ private fun AppBar(screen: Screen) {
 }
 
 private enum class HomeMode { Day, Week }
+private enum class HistoryViewMode { Calendar, Year }
 
 @Composable
 private fun TodayScreen(
@@ -667,19 +671,44 @@ private fun HistoryScreen(
     onUpdateEntryPlan: (DailyEntry, TrainingMode, Int, Int, Int, Int, Int?, List<TrainingSetPlan>?) -> Unit
 ) {
     var month by remember { mutableStateOf(YearMonth.now()) }
+    var viewMode by remember { mutableStateOf(HistoryViewMode.Calendar) }
+    var heatmapYear by remember { mutableStateOf(LocalDate.now().year) }
     var detailDate by remember { mutableStateOf<String?>(null) }
     var editingEntry by remember { mutableStateOf<DailyEntry?>(null) }
     val summaries = remember(state.summaries) { state.summaries.associateBy { it.date } }
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { month = month.minusMonths(1) }) { Text("<") }
-            Text("${month.year}-${month.monthValue.toString().padStart(2, '0')}", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-            TextButton(onClick = { month = month.plusMonths(1) }) { Text(">") }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ChoiceButton("月曆", viewMode == HistoryViewMode.Calendar) { viewMode = HistoryViewMode.Calendar }
+            ChoiceButton("年度", viewMode == HistoryViewMode.Year) { viewMode = HistoryViewMode.Year }
         }
-        TrainingTrendChart(month, summaries)
-        CalendarMonth(month, summaries) { date ->
-            onSelect(date)
-            detailDate = date
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = {
+                if (viewMode == HistoryViewMode.Calendar) month = month.minusMonths(1) else heatmapYear -= 1
+            }) { Text("<") }
+            Text(
+                if (viewMode == HistoryViewMode.Calendar) "${month.year}-${month.monthValue.toString().padStart(2, '0')}" else heatmapYear.toString(),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleLarge
+            )
+            TextButton(onClick = {
+                if (viewMode == HistoryViewMode.Calendar) month = month.plusMonths(1) else heatmapYear += 1
+            }) { Text(">") }
+        }
+        TrainingTrendChart(month, state.completedEntries, summaries)
+        if (viewMode == HistoryViewMode.Calendar) {
+            CalendarMonth(month, summaries) { date ->
+                onSelect(date)
+                detailDate = date
+            }
+        } else {
+            ContributionHeatmap(
+                year = heatmapYear,
+                entries = state.completedEntries,
+                onSelect = { date ->
+                    onSelect(date)
+                    detailDate = date
+                }
+            )
         }
         Spacer(Modifier.weight(1f))
     }
@@ -745,6 +774,7 @@ private fun HistoryDetailList(entries: List<DailyEntry>) {
 @Composable
 private fun TrainingTrendChart(
     month: YearMonth,
+    entries: List<DailyEntry>,
     summaries: Map<String, DaySummary>
 ) {
     val monthDays = remember(month, summaries) {
@@ -753,34 +783,165 @@ private fun TrainingTrendChart(
             date to summaries[date]
         }
     }
-    val maxCompleted = monthDays.maxOfOrNull { it.second?.completed ?: 0 }?.coerceAtLeast(1) ?: 1
+    val monthEntries = remember(month, entries) {
+        entries.filter { YearMonth.from(LocalDate.parse(it.date)) == month }
+    }
+    val series = remember(monthEntries) {
+        monthEntries
+            .groupBy { it.itemId }
+            .map { (_, itemEntries) ->
+                val first = itemEntries.first()
+                TrendSeries(first.title, first.colorHex, itemEntries.groupingBy { it.date }.eachCount())
+            }
+            .sortedBy { it.title }
+    }
+    val maxCompleted = monthDays.maxOfOrNull { (date, _) ->
+        series.sumOf { it.counts[date] ?: 0 }
+    }?.coerceAtLeast(1) ?: 1
     val totalCompleted = monthDays.sumOf { it.second?.completed ?: 0 }
     val totalSeconds = monthDays.sumOf { it.second?.durationSeconds ?: 0 }
     val primaryColor = MaterialTheme.colorScheme.primary
     val emptyColor = MaterialTheme.colorScheme.surface
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("趨勢", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
             Text("$totalCompleted 次 · ${formatDuration(totalSeconds)}", style = MaterialTheme.typography.bodySmall)
         }
-        Canvas(modifier = Modifier.fillMaxWidth().height(120.dp)) {
+        Canvas(modifier = Modifier.fillMaxWidth().height(140.dp)) {
             val barGap = 3.dp.toPx()
             val chartHeight = size.height - 18.dp.toPx()
             val barWidth = ((size.width - barGap * (monthDays.size - 1)) / monthDays.size).coerceAtLeast(2.dp.toPx())
-            monthDays.forEachIndexed { index, (_, summary) ->
-                val completed = summary?.completed ?: 0
-                val ratio = completed.toFloat() / maxCompleted.toFloat()
-                val barHeight = (chartHeight * ratio).coerceAtLeast(if (completed > 0) 3.dp.toPx() else 0f)
+            monthDays.forEachIndexed { index, (date, summary) ->
                 val left = index * (barWidth + barGap)
-                val top = chartHeight - barHeight
-                drawRect(
-                    color = if (completed > 0) primaryColor else emptyColor,
-                    topLeft = Offset(left, top),
-                    size = Size(barWidth, barHeight)
-                )
+                if ((summary?.completed ?: 0) == 0) {
+                    drawRoundRect(
+                        color = emptyColor,
+                        topLeft = Offset(left, chartHeight - 2.dp.toPx()),
+                        size = Size(barWidth, 2.dp.toPx()),
+                        cornerRadius = CornerRadius(2.dp.toPx())
+                    )
+                }
+                var stackBottom = chartHeight
+                series.forEach { item ->
+                    val count = item.counts[date] ?: 0
+                    if (count > 0) {
+                        val color = parseColor(item.colorHex, primaryColor)
+                        val barHeight = (chartHeight * count.toFloat() / maxCompleted.toFloat()).coerceAtLeast(4.dp.toPx())
+                        stackBottom -= barHeight
+                        drawRoundRect(
+                            color = color,
+                            topLeft = Offset(left, stackBottom),
+                            size = Size(barWidth, barHeight),
+                            cornerRadius = CornerRadius(2.dp.toPx())
+                        )
+                    }
+                }
+            }
+            series.forEach { item ->
+                val color = parseColor(item.colorHex, primaryColor)
+                var lastPoint: Offset? = null
+                monthDays.forEachIndexed { index, (date, _) ->
+                    val count = item.counts[date] ?: 0
+                    if (count > 0) {
+                        val x = index * (barWidth + barGap) + barWidth / 2
+                        val y = chartHeight - (chartHeight * count.toFloat() / maxCompleted.toFloat())
+                        val point = Offset(x, y)
+                        lastPoint?.let {
+                            drawLine(color = color, start = it, end = point, strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
+                        }
+                        drawCircle(color = color, radius = 3.dp.toPx(), center = point)
+                        lastPoint = point
+                    }
+                }
+            }
+        }
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(series.take(8), key = { it.title }) { item ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Surface(
+                        color = parseColor(item.colorHex, primaryColor),
+                        shape = RoundedCornerShape(4.dp),
+                        modifier = Modifier.height(10.dp).fillParentMaxWidth(0.035f)
+                    ) {}
+                    Text(item.title, style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
     }
+}
+
+private data class TrendSeries(
+    val title: String,
+    val colorHex: String,
+    val counts: Map<String, Int>
+)
+
+@Composable
+private fun ContributionHeatmap(
+    year: Int,
+    entries: List<DailyEntry>,
+    onSelect: (String) -> Unit
+) {
+    val start = remember(year) { LocalDate.of(year, 1, 1) }
+    val end = remember(year) { LocalDate.of(year, 12, 31) }
+    val leading = start.dayOfWeek.value % 7
+    val dates = remember(year) {
+        List(leading) { null } + generateSequence(start) { date ->
+            date.plusDays(1).takeIf { !it.isAfter(end) }
+        }.toList()
+    }
+    val weeks = remember(dates) { dates.chunked(7) }
+    val counts = remember(year, entries) {
+        entries
+            .filter { LocalDate.parse(it.date).year == year }
+            .groupingBy { it.date }
+            .eachCount()
+    }
+    val total = counts.values.sum()
+    val maxCount = counts.values.maxOrNull()?.coerceAtLeast(1) ?: 1
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("$total 次訓練 in $year", style = MaterialTheme.typography.titleMedium)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            items(weeks.size) { weekIndex ->
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    repeat(7) { dayIndex ->
+                        val date = weeks[weekIndex].getOrNull(dayIndex)
+                        val count = date?.let { counts[it.toString()] ?: 0 } ?: 0
+                        val level = if (date == null || count == 0) 0 else ((count.toFloat() / maxCount) * 4).roundToInt().coerceIn(1, 4)
+                        Surface(
+                            color = contributionColor(level),
+                            shape = RoundedCornerShape(4.dp),
+                            modifier = Modifier
+                                .height(14.dp)
+                                .fillParentMaxWidth(0.032f)
+                                .clickable(enabled = date != null && count > 0) {
+                                    date?.let { onSelect(it.toString()) }
+                                }
+                        ) {}
+                    }
+                }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Less", style = MaterialTheme.typography.bodySmall)
+            (0..4).forEach { level ->
+                Surface(
+                    color = contributionColor(level),
+                    shape = RoundedCornerShape(4.dp),
+                    modifier = Modifier.height(12.dp).fillMaxWidth(0.035f)
+                ) {}
+            }
+            Text("More", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+private fun contributionColor(level: Int): Color = when (level) {
+    1 -> Color(0xFFFFD8D2)
+    2 -> Color(0xFFF2A8A0)
+    3 -> Color(0xFFE26761)
+    4 -> Color(0xFFB94A45)
+    else -> Color(0xFFEFF4F8)
 }
 
 @Composable
@@ -854,75 +1015,80 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
     }
 
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Text("訓練項目", style = MaterialTheme.typography.titleLarge) }
-        items(vm.state.items, key = { it.id }) { item ->
-                EditableItemRow(
-                    item = item,
-                    onEdit = {
-                        editItem = item
-                        showDialog = true
-                    },
-                    onDelete = { vm.archiveItem(item.id) }
-                )
+        item {
+            SettingsDrawerSection("訓練項目", "${vm.state.items.size} 個項目", initiallyExpanded = true) {
+                vm.state.items.forEach { item ->
+                    EditableItemRow(
+                        item = item,
+                        onEdit = {
+                            editItem = item
+                            showDialog = true
+                        },
+                        onDelete = { vm.archiveItem(item.id) }
+                    )
+                }
+                if (vm.state.items.isEmpty()) {
+                    Text("尚未新增訓練項目", style = MaterialTheme.typography.bodyMedium, color = TrainlyMuted)
+                }
+            }
         }
-        item { Text("標籤管理", style = MaterialTheme.typography.titleLarge) }
-        items(vm.state.tags, key = { it.name }) { tag ->
-            Surface(
-                color = parseColor(tag.colorHex, MaterialTheme.colorScheme.surface),
-                shape = MaterialTheme.shapes.medium,
-                tonalElevation = 0.dp,
-                modifier = Modifier.fillMaxWidth().shadow(8.dp, MaterialTheme.shapes.medium)
-            ) {
-                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(tag.name, style = MaterialTheme.typography.titleMedium)
-                        Text("${tag.schedule.label()} · priority ${tag.priority} · ${weekdayLabel(tag.weeklyDay)}", style = MaterialTheme.typography.bodySmall)
+        item {
+            SettingsDrawerSection("標籤管理", "${vm.state.tags.size} 個標籤") {
+                vm.state.tags.forEach { tag ->
+                    Surface(
+                        color = parseColor(tag.colorHex, MaterialTheme.colorScheme.surface),
+                        shape = MaterialTheme.shapes.medium,
+                        tonalElevation = 0.dp,
+                        modifier = Modifier.fillMaxWidth().shadow(8.dp, MaterialTheme.shapes.medium)
+                    ) {
+                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(tag.name, style = MaterialTheme.typography.titleMedium)
+                                Text("${tag.schedule.label()} · priority ${tag.priority} · ${weekdayLabel(tag.weeklyDay)}", style = MaterialTheme.typography.bodySmall)
+                            }
+                            IconButton(onClick = {
+                                editTag = tag
+                                showTagDialog = true
+                            }) {
+                                Icon(Icons.Outlined.Edit, contentDescription = "修改")
+                            }
+                            IconButton(onClick = { vm.deleteTag(tag.name) }) {
+                                Icon(Icons.Outlined.Delete, contentDescription = "刪除")
+                            }
+                        }
                     }
-                    IconButton(onClick = {
-                        editTag = tag
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = {
+                        editTag = null
                         showTagDialog = true
-                    }) {
-                        Icon(Icons.Outlined.Edit, contentDescription = "修改")
-                    }
-                    IconButton(onClick = { vm.deleteTag(tag.name) }) {
-                        Icon(Icons.Outlined.Delete, contentDescription = "刪除")
-                    }
+                    }) { Text("新增標籤") }
+                    Button(onClick = { showAdvancedDialog = true }) { Text("進階設定") }
                 }
             }
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = {
-                    editTag = null
-                    showTagDialog = true
-                }) { Text("新增標籤") }
-                Button(onClick = { showAdvancedDialog = true }) { Text("進階設定") }
-            }
-        }
-        item { Text("GitHub 更新", style = MaterialTheme.typography.titleLarge) }
-        item { OutlinedTextField(owner, { owner = it }, label = { Text("Owner") }, modifier = Modifier.fillMaxWidth()) }
-        item { OutlinedTextField(repo, { repo = it }, label = { Text("Repo") }, modifier = Modifier.fillMaxWidth()) }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { vm.saveUpdateSettings(owner, repo) }) { Text("儲存") }
-                Button(enabled = !checking, onClick = { checking = true }) {
-                    Icon(Icons.Outlined.Refresh, contentDescription = null)
-                    Text("檢查")
+            SettingsDrawerSection("GitHub 更新", "${owner}/${repo}") {
+                OutlinedTextField(owner, { owner = it }, label = { Text("Owner") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(repo, { repo = it }, label = { Text("Repo") }, modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { vm.saveUpdateSettings(owner, repo) }) { Text("儲存") }
+                    Button(enabled = !checking, onClick = { checking = true }) {
+                        Icon(Icons.Outlined.Refresh, contentDescription = null)
+                        Text("檢查")
+                    }
+                }
+                vm.state.updateInfo?.let { info ->
+                    Text("最新版本：${info.latestVersion}")
+                    Button(onClick = { UpdateChecker().openRelease(context, info.releaseUrl) }) {
+                        Text(if (info.isNewer) "開啟下載頁" else "檢視 Release")
+                    }
                 }
             }
         }
-        vm.state.updateInfo?.let { info ->
-            item {
-                Text("最新版本：${info.latestVersion}")
-                Button(onClick = { UpdateChecker().openRelease(context, info.releaseUrl) }) {
-                    Text(if (info.isNewer) "開啟下載頁" else "檢視 Release")
-                }
-            }
-        }
-        item { Text("Google 同步", style = MaterialTheme.typography.titleLarge) }
         item {
             val account = googleAccount
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SettingsDrawerSection("Google 同步", googleStatus) {
                 Text(googleStatus, style = MaterialTheme.typography.bodyMedium)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     item {
@@ -1007,6 +1173,38 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
                 showAdvancedDialog = false
             }
         )
+    }
+}
+
+@Composable
+private fun SettingsDrawerSection(
+    title: String,
+    subtitle: String,
+    initiallyExpanded: Boolean = false,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    var expanded by remember(title) { mutableStateOf(initiallyExpanded) }
+    Surface(
+        tonalElevation = 0.dp,
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth().shadow(8.dp, MaterialTheme.shapes.medium)
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.titleMedium)
+                    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = TrainlyMuted)
+                }
+                Text(if (expanded) "收合" else "展開", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            }
+            if (expanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
+            }
+        }
     }
 }
 

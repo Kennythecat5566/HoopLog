@@ -21,9 +21,9 @@ class SettingsStore(context: Context) {
     }
 
     fun loadUiSettings(): UiSettings {
-        if (prefs.getInt("ui_template_version", 0) < 1) {
+        if (prefs.getInt("ui_template_version", 0) < 2) {
             saveUiSettings(UiSettings())
-            prefs.edit().putInt("ui_template_version", 1).apply()
+            prefs.edit().putInt("ui_template_version", 2).apply()
         }
         return UiSettings(
             primaryColorHex = prefs.getString("ui_primary", "#E26761") ?: "#E26761",
@@ -43,7 +43,7 @@ class SettingsStore(context: Context) {
             .putFloat("ui_font_scale", settings.fontScale.coerceIn(0.85f, 1.25f))
             .putFloat("ui_density_scale", settings.densityScale.coerceIn(0.85f, 1.2f))
             .putString("ui_style", settings.style)
-            .putInt("ui_template_version", 1)
+            .putInt("ui_template_version", 2)
             .apply()
     }
 }
