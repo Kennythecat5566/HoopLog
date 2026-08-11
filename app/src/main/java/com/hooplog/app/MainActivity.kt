@@ -1910,7 +1910,7 @@ private fun googleSignInErrorMessage(error: Throwable, resultCode: Int? = null):
     return when (apiError?.statusCode) {
         10 -> "Google OAuth 尚未設定，請在 Google Cloud 建立 Android OAuth client 並填入 app 簽章 SHA-1"
         12501 -> "Google 登入已取消"
-        12500 -> "Google 登入失敗，請確認手機有 Google Play 服務"
+        12500 -> "Google 登入失敗，請確認 Google Cloud 的 Android OAuth、Drive API、OAuth 同意畫面與測試使用者已設定"
         else -> error.message ?: "Google 登入失敗（resultCode: ${resultCode ?: "unknown"}）"
     }
 }
