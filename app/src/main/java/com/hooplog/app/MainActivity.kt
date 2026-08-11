@@ -1415,30 +1415,42 @@ private fun TrainingTimerDialog(
                 }
                 CounterControl(
                     label = "組數",
-                    value = "${setCount} 組",
+                    value = setCount.toString(),
                     onDecrease = { applyPlan(nextSets = (setCount - 1).coerceAtLeast(completedSets.coerceAtLeast(1))) },
-                    onIncrease = { applyPlan(nextSets = setCount + 1) }
+                    onIncrease = { applyPlan(nextSets = setCount + 1) },
+                    onValueInput = { input ->
+                        input.toIntOrNull()?.let { applyPlan(nextSets = it.coerceAtLeast(completedSets.coerceAtLeast(1))) }
+                    }
                 )
                 if (mode == TrainingMode.Time) {
                     CounterControl(
-                        label = "每組時間",
-                        value = formatDuration(workSeconds),
+                        label = "每組秒數",
+                        value = workSeconds.toString(),
                         onDecrease = { applyPlan(nextWork = workSeconds - 30) },
-                        onIncrease = { applyPlan(nextWork = workSeconds + 30) }
+                        onIncrease = { applyPlan(nextWork = workSeconds + 30) },
+                        onValueInput = { input ->
+                            input.toIntOrNull()?.let { applyPlan(nextWork = it) }
+                        }
                     )
                 } else {
                     CounterControl(
                         label = "每組次數",
-                        value = "${repsPerSet} 次",
+                        value = repsPerSet.toString(),
                         onDecrease = { applyPlan(nextReps = repsPerSet - 1) },
-                        onIncrease = { applyPlan(nextReps = repsPerSet + 1) }
+                        onIncrease = { applyPlan(nextReps = repsPerSet + 1) },
+                        onValueInput = { input ->
+                            input.toIntOrNull()?.let { applyPlan(nextReps = it) }
+                        }
                     )
                 }
                 CounterControl(
-                    label = "休息時間",
-                    value = formatDuration(restSeconds),
+                    label = "休息秒數",
+                    value = restSeconds.toString(),
                     onDecrease = { applyPlan(nextRest = restSeconds - 15) },
-                    onIncrease = { applyPlan(nextRest = restSeconds + 15) }
+                    onIncrease = { applyPlan(nextRest = restSeconds + 15) },
+                    onValueInput = { input ->
+                        input.toIntOrNull()?.let { applyPlan(nextRest = it) }
+                    }
                 )
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     repeat(setCount) { index ->
@@ -1544,17 +1556,23 @@ private fun SetCard(
                 }
                 if (plan.mode == TrainingMode.Time) {
                     CounterControl(
-                        label = "本組時間",
-                        value = formatDuration(plan.durationSeconds),
+                        label = "本組秒數",
+                        value = plan.durationSeconds.toString(),
                         onDecrease = { onDurationChange(plan.durationSeconds - 30) },
-                        onIncrease = { onDurationChange(plan.durationSeconds + 30) }
+                        onIncrease = { onDurationChange(plan.durationSeconds + 30) },
+                        onValueInput = { input ->
+                            input.toIntOrNull()?.let(onDurationChange)
+                        }
                     )
                 } else {
                     CounterControl(
                         label = "本組次數",
-                        value = "${plan.reps} 次",
+                        value = plan.reps.toString(),
                         onDecrease = { onRepsChange(plan.reps - 1) },
-                        onIncrease = { onRepsChange(plan.reps + 1) }
+                        onIncrease = { onRepsChange(plan.reps + 1) },
+                        onValueInput = { input ->
+                            input.toIntOrNull()?.let(onRepsChange)
+                        }
                     )
                 }
             }
@@ -1586,7 +1604,8 @@ private fun CounterControl(
     label: String,
     value: String,
     onDecrease: () -> Unit,
-    onIncrease: () -> Unit
+    onIncrease: () -> Unit,
+    onValueInput: ((String) -> Unit)? = null
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1597,7 +1616,17 @@ private fun CounterControl(
         TextButton(onClick = onDecrease) {
             Text("-")
         }
-        Text(value, style = MaterialTheme.typography.titleMedium)
+        if (onValueInput == null) {
+            Text(value, style = MaterialTheme.typography.titleMedium)
+        } else {
+            OutlinedTextField(
+                value = value,
+                onValueChange = { onValueInput(it.filter(Char::isDigit).take(4)) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(0.75f)
+            )
+        }
         TextButton(onClick = onIncrease) {
             Text("+")
         }
