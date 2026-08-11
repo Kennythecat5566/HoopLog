@@ -4,7 +4,6 @@ import android.app.Application
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.app.Activity
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -70,6 +69,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
@@ -106,6 +106,7 @@ class MainActivity : ComponentActivity() {
 
 data class UiState(
     val today: String = LocalDate.now().toString(),
+    val activeDate: String = LocalDate.now().toString(),
     val entries: List<DailyEntry> = emptyList(),
     val weekEntries: Map<String, List<DailyEntry>> = emptyMap(),
     val items: List<TrainingItem> = emptyList(),
@@ -134,19 +135,21 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
 
     fun reload() {
         val today = LocalDate.now().toString()
+        val activeDate = state.activeDate.ifBlank { today }
         val weekDates = LocalDate.now().weekDates()
-        trainingStore.ensureEntriesFor(today)
+        trainingStore.ensureEntriesFor(activeDate)
         val selected = state.selectedHistory
         state = state.copy(
             today = today,
-            entries = trainingStore.entriesFor(today),
+            activeDate = activeDate,
+            entries = trainingStore.entriesFor(activeDate),
             weekEntries = weekDates.associate { date ->
                 val key = date.toString()
                 key to trainingStore.entriesFor(key)
             },
             items = trainingStore.activeItems(),
             summaries = trainingStore.summaries(),
-            todaySession = trainingStore.sessionFor(today),
+            todaySession = trainingStore.sessionFor(activeDate),
             historyEntries = selected?.let { trainingStore.historyEntriesFor(it) } ?: emptyList(),
             tags = trainingStore.tags(),
             uiSettings = settingsStore.loadUiSettings(),
@@ -178,17 +181,22 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
             state = state.copy(message = "請輸入訓練項目")
             return
         }
-        trainingStore.saveItem(id, title, tag, colorHex, priority, mode, durationSeconds, repsPerSet, sets, restSeconds, comment, videoUrl)
+        trainingStore.saveItem(id, title, tag, colorHex, priority, mode, durationSeconds, repsPerSet, sets, restSeconds, comment, videoUrl, state.activeDate)
         reload()
     }
 
     fun startTodaySession() {
-        trainingStore.startSession(state.today)
+        trainingStore.startSession(state.activeDate)
+        reload()
+    }
+
+    fun changeActiveDate(date: LocalDate) {
+        state = state.copy(activeDate = date.toString())
         reload()
     }
 
     fun archiveItem(id: Long) {
-        trainingStore.archiveItem(id)
+        trainingStore.archiveItem(id, state.activeDate)
         reload()
     }
 
@@ -343,7 +351,7 @@ fun HoopLogApp(vm: HoopLogViewModel = viewModel()) {
                     )
                 }
                 when (screen) {
-                    Screen.Today -> TodayScreen(vm.state, vm::toggle, vm::updateEntryPlan, vm::saveItem, vm::archiveItem, vm::startTodaySession)
+                    Screen.Today -> TodayScreen(vm.state, vm::toggle, vm::updateEntryPlan, vm::saveItem, vm::archiveItem, vm::startTodaySession, vm::changeActiveDate)
                     Screen.History -> HistoryScreen(vm.state, vm::selectHistory, vm::updateEntryPlan)
                     Screen.Settings -> SettingsScreen(vm)
                 }
@@ -377,9 +385,12 @@ private fun TodayScreen(
     onUpdateEntryPlan: (DailyEntry, TrainingMode, Int, Int, Int, Int, Int?, List<TrainingSetPlan>?) -> Unit,
     onSaveItem: (Long?, String, String, String, Int, TrainingMode, Int, Int, Int, Int, String, String) -> Unit,
     onArchiveItem: (Long) -> Unit,
-    onStartSession: () -> Unit
+    onStartSession: () -> Unit,
+    onChangeDate: (LocalDate) -> Unit
 ) {
     val entries = state.entries
+    val activeDate = LocalDate.parse(state.activeDate)
+    val today = LocalDate.parse(state.today)
     var homeMode by remember { mutableStateOf(HomeMode.Day) }
     var selectedTag by remember { mutableStateOf("全部") }
     val tags = remember(entries) { listOf("全部") + entries.map { it.tag }.distinct().sorted() }
@@ -390,10 +401,19 @@ private fun TodayScreen(
     var timerEntry by remember { mutableStateOf<DailyEntry?>(null) }
     var editing by remember { mutableStateOf<TrainingItem?>(null) }
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = { onChangeDate(activeDate.minusDays(1)) }) { Text("<") }
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(activeDate.toString(), style = MaterialTheme.typography.titleMedium)
+                Text(if (activeDate == today) "今天" else "補記日期", style = MaterialTheme.typography.bodySmall)
+            }
+            TextButton(onClick = { onChangeDate(activeDate.plusDays(1)) }) { Text(">") }
+        }
+        Spacer(Modifier.height(8.dp))
         Text("$completed / ${entries.size}", style = MaterialTheme.typography.displaySmall)
-        Text("今日完成", style = MaterialTheme.typography.bodyMedium)
+        Text(if (activeDate == today) "今日完成" else "補記完成", style = MaterialTheme.typography.bodyMedium)
         Text(
-            if (state.todaySession.startedAt == null) "尚未開始計時" else "當日訓練時長 ${formatDuration(state.todaySession.durationSeconds)}",
+            if (state.todaySession.startedAt == null) "尚未開始計時" else "訓練時長 ${formatDuration(state.todaySession.durationSeconds)}",
             style = MaterialTheme.typography.bodySmall
         )
         Spacer(Modifier.height(12.dp))
@@ -607,6 +627,7 @@ private fun HistoryScreen(
             Text("${month.year}-${month.monthValue.toString().padStart(2, '0')}", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
             TextButton(onClick = { month = month.plusMonths(1) }) { Text(">") }
         }
+        TrainingTrendChart(month, summaries)
         CalendarMonth(month, summaries) { date ->
             onSelect(date)
             detailDate = date
@@ -668,6 +689,47 @@ private fun HistoryDetailList(entries: List<DailyEntry>) {
                     onChecked = {},
                     onClick = {}
                 )
+        }
+    }
+}
+
+@Composable
+private fun TrainingTrendChart(
+    month: YearMonth,
+    summaries: Map<String, DaySummary>
+) {
+    val monthDays = remember(month, summaries) {
+        (1..month.lengthOfMonth()).map { day ->
+            val date = month.atDay(day).toString()
+            date to summaries[date]
+        }
+    }
+    val maxCompleted = monthDays.maxOfOrNull { it.second?.completed ?: 0 }?.coerceAtLeast(1) ?: 1
+    val totalCompleted = monthDays.sumOf { it.second?.completed ?: 0 }
+    val totalSeconds = monthDays.sumOf { it.second?.durationSeconds ?: 0 }
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val emptyColor = MaterialTheme.colorScheme.surface
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("趨勢", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+            Text("$totalCompleted 次 · ${formatDuration(totalSeconds)}", style = MaterialTheme.typography.bodySmall)
+        }
+        Canvas(modifier = Modifier.fillMaxWidth().height(120.dp)) {
+            val barGap = 3.dp.toPx()
+            val chartHeight = size.height - 18.dp.toPx()
+            val barWidth = ((size.width - barGap * (monthDays.size - 1)) / monthDays.size).coerceAtLeast(2.dp.toPx())
+            monthDays.forEachIndexed { index, (_, summary) ->
+                val completed = summary?.completed ?: 0
+                val ratio = completed.toFloat() / maxCompleted.toFloat()
+                val barHeight = (chartHeight * ratio).coerceAtLeast(if (completed > 0) 3.dp.toPx() else 0f)
+                val left = index * (barWidth + barGap)
+                val top = chartHeight - barHeight
+                drawRect(
+                    color = if (completed > 0) primaryColor else emptyColor,
+                    topLeft = Offset(left, top),
+                    size = Size(barWidth, barHeight)
+                )
+            }
         }
     }
 }
@@ -1450,10 +1512,13 @@ private fun SetCard(
     onComplete: () -> Unit
 ) {
     Surface(tonalElevation = 1.dp, shape = MaterialTheme.shapes.small, modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.padding(if (plan.completed) 8.dp else 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("第 $setNumber 組", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "第 $setNumber 組",
+                        style = if (plan.completed) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.titleMedium
+                    )
                     Text(
                         when {
                             plan.completed -> "已完成"
@@ -1461,10 +1526,16 @@ private fun SetCard(
                             plan.mode == TrainingMode.Time -> formatDuration(remaining)
                             else -> "${plan.reps} 次"
                         },
-                        style = MaterialTheme.typography.bodyMedium
+                        style = MaterialTheme.typography.bodySmall
                     )
                 }
-                Checkbox(checked = plan.completed, onCheckedChange = { if (!plan.completed) onComplete() })
+                if (plan.completed) {
+                    TextButton(onClick = onUndo) {
+                        Text("復原")
+                    }
+                } else {
+                    Checkbox(checked = false, onCheckedChange = { onComplete() })
+                }
             }
             if (!plan.completed) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1485,11 +1556,6 @@ private fun SetCard(
                         onDecrease = { onRepsChange(plan.reps - 1) },
                         onIncrease = { onRepsChange(plan.reps + 1) }
                     )
-                }
-            }
-            if (plan.completed) {
-                TextButton(onClick = onUndo) {
-                    Text("復原本組")
                 }
             }
             if (enabled && plan.mode == TrainingMode.Time) {

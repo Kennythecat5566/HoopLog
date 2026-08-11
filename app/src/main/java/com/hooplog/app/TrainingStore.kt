@@ -226,7 +226,7 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
         writableDatabase.delete("tags", "name = ?", arrayOf(name))
     }
 
-    fun saveItem(id: Long?, title: String, tag: String, colorHex: String, priority: Int, mode: TrainingMode, durationSeconds: Int, repsPerSet: Int, sets: Int, restSeconds: Int, comment: String, videoUrl: String) {
+    fun saveItem(id: Long?, title: String, tag: String, colorHex: String, priority: Int, mode: TrainingMode, durationSeconds: Int, repsPerSet: Int, sets: Int, restSeconds: Int, comment: String, videoUrl: String, date: String = LocalDate.now().toString()) {
         val values = ContentValues().apply {
             put("title", title.trim())
             put("tag", tag.cleanTag())
@@ -263,18 +263,18 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                     put("video_url", videoUrl.trim())
                 },
                 "date = ? AND item_id = ?",
-                arrayOf(LocalDate.now().toString(), id.toString())
+                arrayOf(date, id.toString())
             )
         }
     }
 
-    fun archiveItem(id: Long) {
+    fun archiveItem(id: Long, date: String = LocalDate.now().toString()) {
         val values = ContentValues().apply { put("active", 0) }
         writableDatabase.update("items", values, "id = ?", arrayOf(id.toString()))
         writableDatabase.delete(
             "daily_entries",
             "date = ? AND item_id = ?",
-            arrayOf(LocalDate.now().toString(), id.toString())
+            arrayOf(date, id.toString())
         )
     }
 
