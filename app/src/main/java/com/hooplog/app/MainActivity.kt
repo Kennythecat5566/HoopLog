@@ -5,7 +5,9 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -62,6 +64,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -77,6 +80,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import com.google.android.gms.common.api.ApiException
 import java.time.LocalDate
 import java.time.YearMonth
 import kotlin.math.PI
@@ -87,6 +93,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
@@ -197,6 +204,32 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
     fun saveUiSettings(settings: UiSettings) {
         settingsStore.saveUiSettings(settings)
         reload()
+    }
+
+    suspend fun uploadGoogleBackup(context: android.content.Context, account: GoogleSignInAccount) {
+        runCatching {
+            GoogleDriveSync.upload(context, account, trainingStore.exportBackup())
+        }.onSuccess { email ->
+            state = state.copy(message = "已同步到 Google：$email")
+        }.onFailure {
+            state = state.copy(message = it.message ?: "Google 同步失敗")
+        }
+    }
+
+    suspend fun downloadGoogleBackup(context: android.content.Context, account: GoogleSignInAccount) {
+        runCatching {
+            val json = GoogleDriveSync.download(context, account)
+            trainingStore.importBackup(json)
+        }.onSuccess {
+            reload()
+            state = state.copy(message = "已從 Google 還原資料")
+        }.onFailure {
+            state = state.copy(message = it.message ?: "Google 還原失敗")
+        }
+    }
+
+    fun showMessage(message: String) {
+        state = state.copy(message = message)
     }
 
     fun selectHistory(date: String) {
@@ -310,7 +343,7 @@ fun HoopLogApp(vm: HoopLogViewModel = viewModel()) {
                 }
                 when (screen) {
                     Screen.Today -> TodayScreen(vm.state, vm::toggle, vm::updateEntryPlan, vm::saveItem, vm::archiveItem, vm::startTodaySession)
-                    Screen.History -> HistoryScreen(vm.state, vm::selectHistory)
+                    Screen.History -> HistoryScreen(vm.state, vm::selectHistory, vm::updateEntryPlan)
                     Screen.Settings -> SettingsScreen(vm)
                 }
             }
@@ -558,9 +591,14 @@ private fun TrainingRow(
 }
 
 @Composable
-private fun HistoryScreen(state: UiState, onSelect: (String) -> Unit) {
+private fun HistoryScreen(
+    state: UiState,
+    onSelect: (String) -> Unit,
+    onUpdateEntryPlan: (DailyEntry, TrainingMode, Int, Int, Int, Int, Int?, List<TrainingSetPlan>?) -> Unit
+) {
     var month by remember { mutableStateOf(YearMonth.now()) }
     var detailDate by remember { mutableStateOf<String?>(null) }
+    var editingEntry by remember { mutableStateOf<DailyEntry?>(null) }
     val summaries = remember(state.summaries) { state.summaries.associateBy { it.date } }
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -589,7 +627,10 @@ private fun HistoryScreen(state: UiState, onSelect: (String) -> Unit) {
                             colorHex = entry.colorHex,
                             checked = entry.completed,
                             onChecked = {},
-                            onClick = {}
+                            onClick = {
+                                editingEntry = entry
+                                detailDate = null
+                            }
                         )
                     }
                     if (state.historyEntries.isEmpty()) {
@@ -600,6 +641,16 @@ private fun HistoryScreen(state: UiState, onSelect: (String) -> Unit) {
             confirmButton = {
                 TextButton(onClick = { detailDate = null }) { Text("關閉") }
             }
+        )
+    }
+    editingEntry?.let { entry ->
+        TrainingTimerDialog(
+            entry = entry,
+            onDismiss = { editingEntry = null },
+            onPlanChange = { mode, duration, reps, sets, rest, completed, plans ->
+                onUpdateEntryPlan(entry, mode, duration, reps, sets, rest, completed, plans)
+            },
+            onFinish = { editingEntry = null }
         )
     }
 }
@@ -673,6 +724,19 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
     var repo by remember(vm.state.updateSettings) { mutableStateOf(vm.state.updateSettings.repo) }
     var checking by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var googleAccount by remember { mutableStateOf(GoogleDriveSync.lastSignedInAccount(context)) }
+    var syncing by remember { mutableStateOf(false) }
+    val googleLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        runCatching {
+            GoogleSignIn.getSignedInAccountFromIntent(result.data).getResult(ApiException::class.java)
+        }.onSuccess { account ->
+            googleAccount = account
+            vm.showMessage("已登入 Google：${account.email.orEmpty()}")
+        }.onFailure {
+            vm.showMessage(it.message ?: "Google 登入失敗")
+        }
+    }
 
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Text("訓練項目", style = MaterialTheme.typography.titleLarge) }
@@ -738,6 +802,49 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
                 Button(onClick = { UpdateChecker().openRelease(context, info.releaseUrl) }) {
                     Text(if (info.isNewer) "開啟下載頁" else "檢視 Release")
                 }
+            }
+        }
+        item { Text("Google 同步", style = MaterialTheme.typography.titleLarge) }
+        item {
+            val account = googleAccount
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(account?.email?.let { "已登入：$it" } ?: "尚未登入 Google", style = MaterialTheme.typography.bodyMedium)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item {
+                        Button(enabled = !syncing, onClick = {
+                            val client = GoogleSignIn.getClient(context, GoogleDriveSync.signInOptions)
+                            googleLauncher.launch(client.signInIntent)
+                        }) { Text(if (account == null) "登入 Google" else "切換帳號") }
+                    }
+                    item {
+                        Button(enabled = account != null && !syncing, onClick = {
+                            val active = googleAccount ?: return@Button
+                            syncing = true
+                            scope.launch {
+                                vm.uploadGoogleBackup(context, active)
+                                syncing = false
+                            }
+                        }) { Text("上傳同步") }
+                    }
+                    item {
+                        Button(enabled = account != null && !syncing, onClick = {
+                            val active = googleAccount ?: return@Button
+                            syncing = true
+                            scope.launch {
+                                vm.downloadGoogleBackup(context, active)
+                                syncing = false
+                            }
+                        }) { Text("下載還原") }
+                    }
+                    item {
+                        TextButton(enabled = account != null && !syncing, onClick = {
+                            GoogleSignIn.getClient(context, GoogleDriveSync.signInOptions).signOut()
+                            googleAccount = null
+                            vm.showMessage("已登出 Google")
+                        }) { Text("登出") }
+                    }
+                }
+                Text("同步會使用 Google Drive AppData 私有空間。下載還原會覆蓋本機資料。", style = MaterialTheme.typography.bodySmall)
             }
         }
     }

@@ -12,8 +12,8 @@ android {
         applicationId = "com.hooplog.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "0.2.4"
+        versionCode = 16
+        versionName = "0.2.5"
     }
 
     signingConfigs {
@@ -65,4 +65,5 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.core:core-ktx:1.15.0")
+    implementation("com.google.android.gms:play-services-auth:21.6.0")
 }

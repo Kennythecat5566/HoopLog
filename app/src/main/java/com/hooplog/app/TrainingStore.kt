@@ -354,6 +354,77 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
     fun historyEntriesFor(date: String): List<DailyEntry> =
         entriesFor(date, ensure = false).filter { it.completed || it.completedSets > 0 }
 
+    fun exportBackup(): String {
+        val root = JSONObject()
+            .put("schemaVersion", 1)
+            .put("exportedAt", System.currentTimeMillis())
+            .put("tags", exportTable("tags", tagColumns))
+            .put("items", exportTable("items", itemColumns))
+            .put("daily_entries", exportTable("daily_entries", dailyEntryColumns))
+            .put("day_sessions", exportTable("day_sessions", daySessionColumns))
+        return root.toString()
+    }
+
+    fun importBackup(json: String) {
+        val root = JSONObject(json)
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("day_sessions", null, null)
+            db.delete("daily_entries", null, null)
+            db.delete("items", null, null)
+            db.delete("tags", null, null)
+            importTable(db, "tags", tagColumns, root.optJSONArray("tags") ?: JSONArray())
+            importTable(db, "items", itemColumns, root.optJSONArray("items") ?: JSONArray())
+            importTable(db, "daily_entries", dailyEntryColumns, root.optJSONArray("daily_entries") ?: JSONArray())
+            importTable(db, "day_sessions", daySessionColumns, root.optJSONArray("day_sessions") ?: JSONArray())
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    private fun exportTable(table: String, columns: Array<String>): JSONArray =
+        readableDatabase.query(table, columns, null, null, null, null, null).use { cursor ->
+            JSONArray().apply {
+                while (cursor.moveToNext()) {
+                    put(JSONObject().apply {
+                        columns.forEachIndexed { index, column ->
+                            if (cursor.isNull(index)) {
+                                put(column, JSONObject.NULL)
+                            } else {
+                                put(column, when (cursor.getType(index)) {
+                                    android.database.Cursor.FIELD_TYPE_INTEGER -> cursor.getLong(index)
+                                    android.database.Cursor.FIELD_TYPE_FLOAT -> cursor.getDouble(index)
+                                    else -> cursor.getString(index)
+                                })
+                            }
+                        }
+                    })
+                }
+            }
+        }
+
+    private fun importTable(db: SQLiteDatabase, table: String, columns: Array<String>, rows: JSONArray) {
+        repeat(rows.length()) { index ->
+            val row = rows.getJSONObject(index)
+            val values = ContentValues().apply {
+                columns.forEach { column ->
+                    if (!row.has(column) || row.isNull(column)) {
+                        putNull(column)
+                    } else {
+                        when (column) {
+                            "id", "item_id", "priority", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "completed_sets", "completed", "weekly_day", "active", "sort_order" -> put(column, row.optLong(column))
+                            "started_at", "ended_at", "completed_at" -> put(column, row.optLong(column))
+                            else -> put(column, row.optString(column))
+                        }
+                    }
+                }
+            }
+            db.insertWithOnConflict(table, null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        }
+    }
+
     fun toggleEntry(id: Long, completed: Boolean) {
         val row = readableDatabase.rawQuery(
             "SELECT mode, duration_seconds, reps_per_set, sets, set_plans FROM daily_entries WHERE id = ?",
@@ -501,6 +572,11 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
         }
     }
 }
+
+private val tagColumns = arrayOf("name", "color_hex", "priority", "schedule", "weekly_day")
+private val itemColumns = arrayOf("id", "title", "tag", "color_hex", "priority", "mode", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "comment", "video_url", "active", "sort_order")
+private val dailyEntryColumns = arrayOf("id", "date", "item_id", "title", "tag", "color_hex", "priority", "mode", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "completed_sets", "set_plans", "comment", "video_url", "completed", "completed_at")
+private val daySessionColumns = arrayOf("date", "started_at", "ended_at", "duration_seconds")
 
 private val TrainingMode.dbValue: String
     get() = when (this) {
