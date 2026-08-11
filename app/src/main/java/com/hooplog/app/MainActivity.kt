@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
@@ -327,7 +328,6 @@ fun HoopLogApp(vm: HoopLogViewModel = viewModel()) {
         var screen by remember { mutableStateOf(Screen.Today) }
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
-            topBar = { AppBar(screen) },
             bottomBar = {
                 Surface(
                     modifier = Modifier
@@ -467,38 +467,26 @@ private fun TodayScreen(
     var timerEntry by remember { mutableStateOf<DailyEntry?>(null) }
     var editing by remember { mutableStateOf<TrainingItem?>(null) }
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = { onChangeDate(activeDate.minusDays(1)) }) { Text("<") }
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(activeDate.toString(), style = MaterialTheme.typography.titleMedium)
-                Text(if (activeDate == today) "今天" else "補記日期", style = MaterialTheme.typography.bodySmall)
-            }
-            TextButton(onClick = { onChangeDate(activeDate.plusDays(1)) }) { Text(">") }
-        }
-        Spacer(Modifier.height(8.dp))
-        Text("$completed / ${entries.size}", style = MaterialTheme.typography.displaySmall)
-        Text(if (activeDate == today) "今日完成" else "補記完成", style = MaterialTheme.typography.bodyMedium)
-        Text(
-            if (state.todaySession.startedAt == null) "尚未開始計時" else "訓練時長 ${formatDuration(state.todaySession.durationSeconds)}",
-            style = MaterialTheme.typography.bodySmall
-        )
-        Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ChoiceButton("本日", homeMode == HomeMode.Day) { homeMode = HomeMode.Day }
-            ChoiceButton("本周", homeMode == HomeMode.Week) { homeMode = HomeMode.Week }
-        }
-        Spacer(Modifier.height(12.dp))
-        NotionTagFilter(
+        Spacer(Modifier.height(18.dp))
+        TodayControlPill(
+            activeDate = activeDate,
+            today = today,
+            completed = completed,
+            total = entries.size,
+            session = state.todaySession,
+            homeMode = homeMode,
             tags = tags,
             selectedTags = selectedTags,
             selectedSchedules = selectedSchedules,
+            onChangeDate = onChangeDate,
+            onChangeHomeMode = { homeMode = it },
             onToggleTag = { tag ->
                 selectedTags = if (tag in selectedTags) selectedTags - tag else selectedTags + tag
             },
             onToggleSchedule = { schedule ->
                 selectedSchedules = if (schedule in selectedSchedules) selectedSchedules - schedule else selectedSchedules + schedule
             },
-            onClear = {
+            onClearFilter = {
                 selectedTags = emptySet()
                 selectedSchedules = emptySet()
             }
@@ -567,20 +555,125 @@ private fun TodayScreen(
 }
 
 @Composable
+private fun TodayControlPill(
+    activeDate: LocalDate,
+    today: LocalDate,
+    completed: Int,
+    total: Int,
+    session: DaySession,
+    homeMode: HomeMode,
+    tags: List<TrainingTag>,
+    selectedTags: Set<String>,
+    selectedSchedules: Set<TagSchedule>,
+    onChangeDate: (LocalDate) -> Unit,
+    onChangeHomeMode: (HomeMode) -> Unit,
+    onToggleTag: (String) -> Unit,
+    onToggleSchedule: (TagSchedule) -> Unit,
+    onClearFilter: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val filterCount = selectedTags.size + selectedSchedules.size
+    Box {
+        Button(
+            onClick = { expanded = true },
+            modifier = Modifier.defaultMinSize(minWidth = 0.dp, minHeight = 38.dp),
+            shape = RoundedCornerShape(28.dp),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = TrainlyInk
+            )
+        ) {
+            Text(
+                "${completed}/${total} · ${if (homeMode == HomeMode.Day) "本日" else "本周"} · Filter ${if (filterCount == 0) "Off" else filterCount}",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.fillMaxWidth(0.92f)
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Tags", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    TextButton(onClick = { expanded = false }) { Text("Done") }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { onChangeDate(activeDate.minusDays(1)) }) { Text("<") }
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(activeDate.toString(), style = MaterialTheme.typography.titleMedium)
+                        Text(if (activeDate == today) "今天" else "補記日期", style = MaterialTheme.typography.bodySmall, color = TrainlyMuted)
+                    }
+                    TextButton(onClick = { onChangeDate(activeDate.plusDays(1)) }) { Text(">") }
+                }
+                Text("$completed / $total · ${if (session.startedAt == null) "尚未開始" else formatDuration(session.durationSeconds)}", style = MaterialTheme.typography.bodySmall, color = TrainlyMuted)
+                DividerLike()
+                NotionMenuRow("Filter") {
+                    if (filterCount > 0) TextButton(onClick = onClearFilter) { Text("清除 $filterCount") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ChoiceButton("本日", homeMode == HomeMode.Day, compact = true) { onChangeHomeMode(HomeMode.Day) }
+                    ChoiceButton("本周", homeMode == HomeMode.Week, compact = true) { onChangeHomeMode(HomeMode.Week) }
+                }
+                NotionTagFilter(
+                    tags = tags,
+                    selectedTags = selectedTags,
+                    selectedSchedules = selectedSchedules,
+                    onToggleTag = onToggleTag,
+                    onToggleSchedule = onToggleSchedule,
+                    onClear = onClearFilter,
+                    compactHeader = true
+                )
+                DividerLike()
+                NotionMenuRow("Sort") {
+                    Text("Priority → Tag → Name", style = MaterialTheme.typography.bodySmall, color = TrainlyMuted)
+                }
+                NotionMenuRow("Group") {
+                    Text("Tag schedule", style = MaterialTheme.typography.bodySmall, color = TrainlyMuted)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NotionMenuRow(
+    title: String,
+    trailing: @Composable RowScope.() -> Unit = {}
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        trailing()
+    }
+}
+
+@Composable
+private fun DividerLike() {
+    Surface(
+        color = TrainlyPanel.copy(alpha = 0.55f),
+        modifier = Modifier.fillMaxWidth().height(1.dp)
+    ) {}
+}
+
+@Composable
 private fun NotionTagFilter(
     tags: List<TrainingTag>,
     selectedTags: Set<String>,
     selectedSchedules: Set<TagSchedule>,
     onToggleTag: (String) -> Unit,
     onToggleSchedule: (TagSchedule) -> Unit,
-    onClear: () -> Unit
+    onClear: () -> Unit,
+    compactHeader: Boolean = false
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Filter", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = TrainlyMuted)
-            val count = selectedTags.size + selectedSchedules.size
-            if (count > 0) {
-                TextButton(onClick = onClear) { Text("清除 $count") }
+        if (!compactHeader) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Filter", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = TrainlyMuted)
+                val count = selectedTags.size + selectedSchedules.size
+                if (count > 0) {
+                    TextButton(onClick = onClear) { Text("清除 $count") }
+                }
             }
         }
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
