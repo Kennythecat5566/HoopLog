@@ -3,7 +3,10 @@ package com.hooplog.app
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -82,7 +85,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -446,10 +451,17 @@ private fun TodayScreen(
     val activeDate = LocalDate.parse(state.activeDate)
     val today = LocalDate.parse(state.today)
     var homeMode by remember { mutableStateOf(HomeMode.Day) }
-    var selectedTag by remember { mutableStateOf("全部") }
-    val tags = remember(entries) { listOf("全部") + entries.map { it.tag }.distinct().sorted() }
+    var selectedTags by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selectedSchedules by remember { mutableStateOf<Set<TagSchedule>>(emptySet()) }
+    val tagRules = remember(state.tags, entries) {
+        val saved = state.tags.associateBy { it.name }
+        entries.map { entry ->
+            entry.tag to (saved[entry.tag] ?: TrainingTag(entry.tag, entry.colorHex, entry.priority, TagSchedule.Manual))
+        }.toMap()
+    }
+    val tags = remember(tagRules) { tagRules.values.sortedWith(compareBy<TrainingTag> { it.priority }.thenBy { it.name }) }
     val visibleEntries = entries
-        .filter { selectedTag == "全部" || it.tag == selectedTag }
+        .filter { entry -> entry.matchesNotionFilter(selectedTags, selectedSchedules, tagRules) }
         .sortedWith(compareBy<DailyEntry> { it.priority }.thenBy { it.tag }.thenBy { it.title })
     val completed = entries.count { it.completed }
     var timerEntry by remember { mutableStateOf<DailyEntry?>(null) }
@@ -476,16 +488,21 @@ private fun TodayScreen(
             ChoiceButton("本周", homeMode == HomeMode.Week) { homeMode = HomeMode.Week }
         }
         Spacer(Modifier.height(12.dp))
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(tags, key = { it }) { tag ->
-                ChoiceButton(
-                    text = tag,
-                    selected = selectedTag == tag,
-                    compact = true,
-                    onClick = { selectedTag = tag }
-                )
+        NotionTagFilter(
+            tags = tags,
+            selectedTags = selectedTags,
+            selectedSchedules = selectedSchedules,
+            onToggleTag = { tag ->
+                selectedTags = if (tag in selectedTags) selectedTags - tag else selectedTags + tag
+            },
+            onToggleSchedule = { schedule ->
+                selectedSchedules = if (schedule in selectedSchedules) selectedSchedules - schedule else selectedSchedules + schedule
+            },
+            onClear = {
+                selectedTags = emptySet()
+                selectedSchedules = emptySet()
             }
-        }
+        )
         Spacer(Modifier.height(16.dp))
         if (homeMode == HomeMode.Day) {
             LazyColumn(
@@ -515,7 +532,9 @@ private fun TodayScreen(
             WeekOverview(
                 today = LocalDate.parse(state.today),
                 weekEntries = state.weekEntries,
-                selectedTag = selectedTag
+                selectedTags = selectedTags,
+                selectedSchedules = selectedSchedules,
+                tagRules = tagRules
             )
         }
     }
@@ -547,12 +566,93 @@ private fun TodayScreen(
     }
 }
 
+@Composable
+private fun NotionTagFilter(
+    tags: List<TrainingTag>,
+    selectedTags: Set<String>,
+    selectedSchedules: Set<TagSchedule>,
+    onToggleTag: (String) -> Unit,
+    onToggleSchedule: (TagSchedule) -> Unit,
+    onClear: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Filter", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = TrainlyMuted)
+            val count = selectedTags.size + selectedSchedules.size
+            if (count > 0) {
+                TextButton(onClick = onClear) { Text("清除 $count") }
+            }
+        }
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                ChoiceButton(
+                    text = "全部",
+                    selected = selectedTags.isEmpty() && selectedSchedules.isEmpty(),
+                    compact = true,
+                    onClick = onClear
+                )
+            }
+            items(tags, key = { it.name }) { tag ->
+                NotionTagChip(
+                    tag = tag,
+                    selected = tag.name in selectedTags,
+                    onClick = { onToggleTag(tag.name) }
+                )
+            }
+        }
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(TagSchedule.entries.toList(), key = { it.name }) { schedule ->
+                ChoiceButton(
+                    text = schedule.label(),
+                    selected = schedule in selectedSchedules,
+                    compact = true,
+                    onClick = { onToggleSchedule(schedule) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun NotionTagChip(
+    tag: TrainingTag,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val background = parseColor(tag.colorHex, MaterialTheme.colorScheme.surface)
+    Button(
+        onClick = onClick,
+        modifier = Modifier.defaultMinSize(minWidth = 0.dp, minHeight = 32.dp),
+        shape = RoundedCornerShape(10.dp),
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (selected) background else background.copy(alpha = 0.55f),
+            contentColor = TrainlyInk
+        )
+    ) {
+        Text(if (selected) "✓ ${tag.name}" else tag.name, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+private fun DailyEntry.matchesNotionFilter(
+    selectedTags: Set<String>,
+    selectedSchedules: Set<TagSchedule>,
+    tagRules: Map<String, TrainingTag>
+): Boolean {
+    val tagRule = tagRules[tag]
+    val tagMatches = selectedTags.isEmpty() || tag in selectedTags
+    val scheduleMatches = selectedSchedules.isEmpty() || tagRule?.schedule in selectedSchedules
+    return tagMatches && scheduleMatches
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun WeekOverview(
     today: LocalDate,
     weekEntries: Map<String, List<DailyEntry>>,
-    selectedTag: String
+    selectedTags: Set<String>,
+    selectedSchedules: Set<TagSchedule>,
+    tagRules: Map<String, TrainingTag>
 ) {
     var detailDate by remember { mutableStateOf<LocalDate?>(null) }
     val dates = remember(today) { today.weekDates() }
@@ -563,7 +663,7 @@ private fun WeekOverview(
     ) {
         items(dates, key = { it.toString() }) { date ->
             val entries = weekEntries[date.toString()].orEmpty()
-                .filter { selectedTag == "全部" || it.tag == selectedTag }
+                .filter { it.matchesNotionFilter(selectedTags, selectedSchedules, tagRules) }
                 .sortedWith(compareBy<DailyEntry> { it.priority }.thenBy { it.tag }.thenBy { it.title })
             val completed = entries.count { it.completed }
             val isToday = date == today
@@ -600,7 +700,7 @@ private fun WeekOverview(
 
     detailDate?.let { date ->
         val entries = weekEntries[date.toString()].orEmpty()
-            .filter { selectedTag == "全部" || it.tag == selectedTag }
+            .filter { it.matchesNotionFilter(selectedTags, selectedSchedules, tagRules) }
             .sortedWith(compareBy<DailyEntry> { it.priority }.thenBy { it.tag }.thenBy { it.title })
         AlertDialog(
             onDismissRequest = { detailDate = null },
@@ -638,6 +738,7 @@ private fun TrainingRow(
     onDelete: (() -> Unit)? = null
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
     Box(Modifier.fillMaxWidth()) {
         Surface(
             tonalElevation = 0.dp,
@@ -647,8 +748,12 @@ private fun TrainingRow(
                 .fillMaxWidth()
                 .shadow(8.dp, MaterialTheme.shapes.medium)
                 .combinedClickable(
-                    onClick = onClick,
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onClick()
+                    },
                     onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         if (onEdit != null || onDelete != null) menuOpen = true
                     }
                 )
@@ -1308,6 +1413,7 @@ private fun EditableItemRow(
     onDelete: () -> Unit
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
     Box(Modifier.fillMaxWidth()) {
         Surface(
             tonalElevation = 0.dp,
@@ -1317,8 +1423,11 @@ private fun EditableItemRow(
                 .fillMaxWidth()
                 .shadow(8.dp, MaterialTheme.shapes.medium)
                 .combinedClickable(
-                    onClick = {},
-                    onLongClick = { menuOpen = true }
+                    onClick = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) },
+                    onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        menuOpen = true
+                    }
                 )
         ) {
             Column(Modifier.padding(16.dp)) {
@@ -1644,6 +1753,7 @@ private fun TrainingTimerDialog(
                 setPlans = updated
                 onPlanChange(mode, workSeconds, repsPerSet, updated.size, restSeconds, updated.count { it.completed }, updated)
                 if (updated.all { it.completed }) {
+                    vibrateTimerDone(context)
                     onFinish()
                 } else if (restSeconds > 0) {
                     isResting = true
@@ -1825,7 +1935,10 @@ private fun TrainingTimerDialog(
                                 isResting = false
                                 val updated = setPlans.markSetCompleted(setNumber)
                                 applyPlan(nextPlans = updated)
-                                if (setNumber >= setCount) onFinish()
+                                if (setNumber >= setCount) {
+                                    vibrateTimerDone(context)
+                                    onFinish()
+                                }
                             }
                         )
                     }
@@ -1835,6 +1948,7 @@ private fun TrainingTimerDialog(
         confirmButton = {
             TextButton(onClick = {
                 applyPlan(nextCompleted = setCount)
+                vibrateTimerDone(context)
                 onFinish()
             }) {
                 Text("全部完成")
@@ -2191,6 +2305,22 @@ private val spectrumColors = listOf(
     "#D946EF",
     "#EC4899"
 )
+
+private fun vibrateTimerDone(context: android.content.Context) {
+    val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        context.getSystemService(Vibrator::class.java)
+    } else {
+        @Suppress("DEPRECATION")
+        context.getSystemService(android.content.Context.VIBRATOR_SERVICE) as? Vibrator
+    } ?: return
+    if (!vibrator.hasVibrator()) return
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 120, 80, 180), -1))
+    } else {
+        @Suppress("DEPRECATION")
+        vibrator.vibrate(longArrayOf(0, 120, 80, 180), -1)
+    }
+}
 
 private fun parseColor(value: String, fallback: Color): Color =
     runCatching {
