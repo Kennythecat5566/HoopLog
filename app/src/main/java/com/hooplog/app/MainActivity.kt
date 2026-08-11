@@ -367,7 +367,7 @@ private fun AppBar(screen: Screen) {
         title = {
             Text(
                 when (screen) {
-                    Screen.Today -> "HoopLog"
+                    Screen.Today -> "Trainly"
                     Screen.History -> "訓練回顧"
                     Screen.Settings -> "項目與更新"
                 }

@@ -1,6 +1,6 @@
-# HoopLog
+# Trainly
 
-離線 Android 籃球訓練紀錄 App。核心資料存在手機本機 SQLite，不需要登入或雲端服務。
+離線 Android 日常訓練紀錄 App。核心資料存在手機本機 SQLite，可用 Google Drive AppData 同步備份。
 
 ## 功能
 
@@ -24,7 +24,7 @@ app/build/outputs/apk/debug/app-debug.apk
 
 ## GitHub Release 更新
 
-一般 Android App 無法像 Play Store 一樣從 GitHub 背景靜默自動更新。HoopLog 會檢查 GitHub 最新 Release，若版本較新，開啟 Release 頁面讓使用者下載 APK 並安裝。
+一般 Android App 無法像 Play Store 一樣從 GitHub 背景靜默自動更新。Trainly 會檢查 GitHub 最新 Release，若版本較新，開啟 Release 頁面讓使用者下載 APK 並安裝。
 
 App 的「設定」頁已預設連到：
 
