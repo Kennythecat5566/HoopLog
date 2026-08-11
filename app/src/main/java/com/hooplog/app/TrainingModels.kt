@@ -94,10 +94,10 @@ data class UpdateInfo(
 )
 
 data class UiSettings(
-    val primaryColorHex: String = "#111111",
-    val surfaceColorHex: String = "#FFFFFF",
-    val cardRadius: Int = 8,
+    val primaryColorHex: String = "#E26761",
+    val surfaceColorHex: String = "#F8FAFD",
+    val cardRadius: Int = 24,
     val fontScale: Float = 1.0f,
     val densityScale: Float = 1.0f,
-    val style: String = "Minimal"
+    val style: String = "Soft Active"
 )

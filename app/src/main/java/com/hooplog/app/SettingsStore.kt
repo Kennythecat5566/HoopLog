@@ -20,23 +20,30 @@ class SettingsStore(context: Context) {
             .apply()
     }
 
-    fun loadUiSettings(): UiSettings = UiSettings(
-        primaryColorHex = prefs.getString("ui_primary", "#111111") ?: "#111111",
-        surfaceColorHex = prefs.getString("ui_surface", "#FFFFFF") ?: "#FFFFFF",
-        cardRadius = prefs.getInt("ui_card_radius", 8),
-        fontScale = prefs.getFloat("ui_font_scale", 1.0f),
-        densityScale = prefs.getFloat("ui_density_scale", 1.0f),
-        style = prefs.getString("ui_style", "Minimal") ?: "Minimal"
-    )
+    fun loadUiSettings(): UiSettings {
+        if (prefs.getInt("ui_template_version", 0) < 1) {
+            saveUiSettings(UiSettings())
+            prefs.edit().putInt("ui_template_version", 1).apply()
+        }
+        return UiSettings(
+            primaryColorHex = prefs.getString("ui_primary", "#E26761") ?: "#E26761",
+            surfaceColorHex = prefs.getString("ui_surface", "#F8FAFD") ?: "#F8FAFD",
+            cardRadius = prefs.getInt("ui_card_radius", 24),
+            fontScale = prefs.getFloat("ui_font_scale", 1.0f),
+            densityScale = prefs.getFloat("ui_density_scale", 1.0f),
+            style = prefs.getString("ui_style", "Soft Active") ?: "Soft Active"
+        )
+    }
 
     fun saveUiSettings(settings: UiSettings) {
         prefs.edit()
             .putString("ui_primary", settings.primaryColorHex)
             .putString("ui_surface", settings.surfaceColorHex)
-            .putInt("ui_card_radius", settings.cardRadius.coerceIn(0, 16))
+            .putInt("ui_card_radius", settings.cardRadius.coerceIn(8, 32))
             .putFloat("ui_font_scale", settings.fontScale.coerceIn(0.85f, 1.25f))
             .putFloat("ui_density_scale", settings.densityScale.coerceIn(0.85f, 1.2f))
             .putString("ui_style", settings.style)
+            .putInt("ui_template_version", 1)
             .apply()
     }
 }

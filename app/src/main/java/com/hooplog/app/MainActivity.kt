@@ -53,12 +53,14 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -74,6 +76,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
@@ -270,14 +273,31 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
 
 enum class Screen { Today, History, Settings }
 
+private val TrainlyBackground = Color(0xFFE8F0F8)
+private val TrainlySurface = Color(0xFFF8FAFD)
+private val TrainlyPanel = Color(0xFFD4E0EA)
+private val TrainlyPrimary = Color(0xFFE26761)
+private val TrainlyInk = Color(0xFF2D3948)
+private val TrainlyMuted = Color(0xFF7C8998)
+private val TrainlySoftAccent = Color(0xFFFFE5E1)
+
 @Composable
 fun HoopLogApp(vm: HoopLogViewModel = viewModel()) {
     val ui = vm.state.uiSettings
+    val primary = parseColor(ui.primaryColorHex, TrainlyPrimary)
+    val surface = parseColor(ui.surfaceColorHex, TrainlySurface)
+    val cardRadius = ui.cardRadius.coerceAtLeast(20)
     MaterialTheme(
         colorScheme = MaterialTheme.colorScheme.copy(
-            primary = parseColor(ui.primaryColorHex, Color(0xFF111111)),
-            background = androidx.compose.ui.graphics.Color(0xFFFAFAFA),
-            surface = parseColor(ui.surfaceColorHex, Color.White)
+            primary = primary,
+            onPrimary = Color.White,
+            secondary = TrainlyPanel,
+            background = TrainlyBackground,
+            onBackground = TrainlyInk,
+            surface = surface,
+            onSurface = TrainlyInk,
+            surfaceVariant = Color(0xFFEFF4F8),
+            onSurfaceVariant = TrainlyMuted
         ),
         typography = MaterialTheme.typography.copy(
             bodySmall = MaterialTheme.typography.bodySmall.copy(fontSize = (12 * ui.fontScale).sp),
@@ -288,34 +308,57 @@ fun HoopLogApp(vm: HoopLogViewModel = viewModel()) {
             displayMedium = MaterialTheme.typography.displayMedium.copy(fontSize = (45 * ui.fontScale).sp)
         ),
         shapes = MaterialTheme.shapes.copy(
-            small = RoundedCornerShape(ui.cardRadius.dp),
-            medium = RoundedCornerShape(ui.cardRadius.dp),
-            large = RoundedCornerShape((ui.cardRadius + 4).dp)
+            small = RoundedCornerShape((cardRadius - 8).dp),
+            medium = RoundedCornerShape(cardRadius.dp),
+            large = RoundedCornerShape((cardRadius + 8).dp)
         )
     ) {
         var screen by remember { mutableStateOf(Screen.Today) }
         Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
             topBar = { AppBar(screen) },
             bottomBar = {
-                NavigationBar {
-                    NavigationBarItem(
-                        selected = screen == Screen.Today,
-                        onClick = { screen = Screen.Today },
-                        icon = { Icon(Icons.Outlined.CheckCircle, null) },
-                        label = { Text("今日") }
-                    )
-                    NavigationBarItem(
-                        selected = screen == Screen.History,
-                        onClick = { screen = Screen.History },
-                        icon = { Icon(Icons.Outlined.History, null) },
-                        label = { Text("回顧") }
-                    )
-                    NavigationBarItem(
-                        selected = screen == Screen.Settings,
-                        onClick = { screen = Screen.Settings },
-                        icon = { Icon(Icons.Outlined.Settings, null) },
-                        label = { Text("設定") }
-                    )
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 28.dp, vertical = 12.dp)
+                        .shadow(18.dp, RoundedCornerShape(36.dp)),
+                    shape = RoundedCornerShape(36.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
+                ) {
+                    NavigationBar(
+                        containerColor = Color.Transparent,
+                        tonalElevation = 0.dp
+                    ) {
+                        val itemColors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = TrainlyInk,
+                            selectedTextColor = TrainlyInk,
+                            indicatorColor = MaterialTheme.colorScheme.secondary,
+                            unselectedIconColor = TrainlyMuted,
+                            unselectedTextColor = TrainlyMuted
+                        )
+                        NavigationBarItem(
+                            selected = screen == Screen.Today,
+                            onClick = { screen = Screen.Today },
+                            icon = { Icon(Icons.Outlined.CheckCircle, null) },
+                            label = { Text("今日") },
+                            colors = itemColors
+                        )
+                        NavigationBarItem(
+                            selected = screen == Screen.History,
+                            onClick = { screen = Screen.History },
+                            icon = { Icon(Icons.Outlined.History, null) },
+                            label = { Text("回顧") },
+                            colors = itemColors
+                        )
+                        NavigationBarItem(
+                            selected = screen == Screen.Settings,
+                            onClick = { screen = Screen.Settings },
+                            icon = { Icon(Icons.Outlined.Settings, null) },
+                            label = { Text("設定") },
+                            colors = itemColors
+                        )
+                    }
                 }
             },
             floatingActionButton = {
@@ -325,7 +368,7 @@ fun HoopLogApp(vm: HoopLogViewModel = viewModel()) {
                     FloatingActionButton(onClick = {
                         editing = null
                         showDialog = true
-                    }) {
+                    }, containerColor = TrainlyPrimary, contentColor = Color.White, shape = RoundedCornerShape(24.dp)) {
                         Icon(Icons.Outlined.Add, contentDescription = "新增")
                     }
                     if (showDialog) {
@@ -364,6 +407,10 @@ fun HoopLogApp(vm: HoopLogViewModel = viewModel()) {
 @Composable
 private fun AppBar(screen: Screen) {
     TopAppBar(
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.background,
+            titleContentColor = TrainlyInk
+        ),
         title = {
             Text(
                 when (screen) {
@@ -508,17 +555,18 @@ private fun WeekOverview(
             val completed = entries.count { it.completed }
             val isToday = date == today
             Surface(
-                tonalElevation = if (isToday) 5.dp else 1.dp,
-                color = if (isToday) Color(0xFFEAF3FF) else MaterialTheme.colorScheme.surface,
-                shape = MaterialTheme.shapes.small,
+                tonalElevation = 0.dp,
+                color = if (isToday) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.surface,
+                shape = MaterialTheme.shapes.medium,
                 modifier = Modifier
                     .fillMaxWidth()
+                    .shadow(if (isToday) 14.dp else 7.dp, MaterialTheme.shapes.medium)
                     .combinedClickable(
                         onClick = { detailDate = date },
                         onLongClick = { detailDate = date }
                     )
             ) {
-                Row(Modifier.padding(if (isToday) 16.dp else 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.padding(if (isToday) 18.dp else 16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(
                             "${weekdayLabel(date.dayOfWeek.value)} ${date.monthValue}/${date.dayOfMonth}",
@@ -579,11 +627,12 @@ private fun TrainingRow(
     var menuOpen by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxWidth()) {
         Surface(
-            tonalElevation = 1.dp,
+            tonalElevation = 0.dp,
             color = parseColor(colorHex, MaterialTheme.colorScheme.surface),
-            shape = MaterialTheme.shapes.small,
+            shape = MaterialTheme.shapes.medium,
             modifier = Modifier
                 .fillMaxWidth()
+                .shadow(8.dp, MaterialTheme.shapes.medium)
                 .combinedClickable(
                     onClick = onClick,
                     onLongClick = {
@@ -592,7 +641,7 @@ private fun TrainingRow(
                 )
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Checkbox(checked = checked, onCheckedChange = onChecked)
@@ -754,9 +803,9 @@ private fun CalendarMonth(
                 week.forEach { date ->
                     val summary = date?.let { summaries[it.toString()] }
                     Surface(
-                        tonalElevation = if (summary == null) 0.dp else 1.dp,
-                        shape = MaterialTheme.shapes.small,
-                        color = if (summary == null) MaterialTheme.colorScheme.surface else Color(0xFFEAF7EE),
+                        tonalElevation = 0.dp,
+                        shape = RoundedCornerShape(18.dp),
+                        color = if (summary == null) MaterialTheme.colorScheme.surface else TrainlySoftAccent,
                         modifier = Modifier
                             .weight(1f)
                             .height(56.dp)
@@ -820,11 +869,11 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
         items(vm.state.tags, key = { it.name }) { tag ->
             Surface(
                 color = parseColor(tag.colorHex, MaterialTheme.colorScheme.surface),
-                shape = MaterialTheme.shapes.small,
-                tonalElevation = 1.dp,
-                modifier = Modifier.fillMaxWidth()
+                shape = MaterialTheme.shapes.medium,
+                tonalElevation = 0.dp,
+                modifier = Modifier.fillMaxWidth().shadow(8.dp, MaterialTheme.shapes.medium)
             ) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(tag.name, style = MaterialTheme.typography.titleMedium)
                         Text("${tag.schedule.label()} · priority ${tag.priority} · ${weekdayLabel(tag.weeklyDay)}", style = MaterialTheme.typography.bodySmall)
@@ -971,17 +1020,18 @@ private fun EditableItemRow(
     var menuOpen by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxWidth()) {
         Surface(
-            tonalElevation = 1.dp,
+            tonalElevation = 0.dp,
             color = parseColor(item.colorHex, MaterialTheme.colorScheme.surface),
-            shape = MaterialTheme.shapes.small,
+            shape = MaterialTheme.shapes.medium,
             modifier = Modifier
                 .fillMaxWidth()
+                .shadow(8.dp, MaterialTheme.shapes.medium)
                 .combinedClickable(
                     onClick = {},
                     onLongClick = { menuOpen = true }
                 )
         ) {
-            Column(Modifier.padding(12.dp)) {
+            Column(Modifier.padding(16.dp)) {
                 Text(item.title, style = MaterialTheme.typography.titleMedium)
                 Text(
                     item.planDetail(),
@@ -1079,10 +1129,11 @@ private fun AdvancedSettingsDialog(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ChoiceButton("Minimal", style == "Minimal") { style = "Minimal" }
                     ChoiceButton("Soft", style == "Soft") { style = "Soft" }
+                    ChoiceButton("Soft Active", style == "Soft Active") { style = "Soft Active" }
                 }
                 ColorPicker(label = "主色", colorHex = primary, onColorChange = { primary = it })
                 ColorPicker(label = "介面底色", colorHex = surface, onColorChange = { surface = it })
-                OutlinedTextField(radius, { radius = it.filter(Char::isDigit).take(2) }, label = { Text("卡片弧度 0-16") }, singleLine = true)
+                OutlinedTextField(radius, { radius = it.filter(Char::isDigit).take(2) }, label = { Text("卡片弧度 8-32") }, singleLine = true)
                 OutlinedTextField(fontScale, { fontScale = it.filter(Char::isDigit).take(3) }, label = { Text("字體大小 %") }, singleLine = true)
                 OutlinedTextField(densityScale, { densityScale = it.filter(Char::isDigit).take(3) }, label = { Text("介面大小 %") }, singleLine = true)
             }
@@ -1093,7 +1144,7 @@ private fun AdvancedSettingsDialog(
                     UiSettings(
                         primaryColorHex = primary,
                         surfaceColorHex = surface,
-                        cardRadius = radius.toIntOrNull()?.coerceIn(0, 16) ?: 8,
+                        cardRadius = radius.toIntOrNull()?.coerceIn(8, 32) ?: 24,
                         fontScale = ((fontScale.toIntOrNull() ?: 100) / 100f).coerceIn(0.85f, 1.25f),
                         densityScale = ((densityScale.toIntOrNull() ?: 100) / 100f).coerceIn(0.85f, 1.2f),
                         style = style
@@ -1523,7 +1574,12 @@ private fun SetCard(
     onStartPause: () -> Unit,
     onComplete: () -> Unit
 ) {
-    Surface(tonalElevation = 1.dp, shape = MaterialTheme.shapes.small, modifier = Modifier.fillMaxWidth()) {
+    Surface(
+        tonalElevation = 0.dp,
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth().shadow(7.dp, MaterialTheme.shapes.medium)
+    ) {
         Column(Modifier.padding(if (plan.completed) 8.dp else 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -1642,7 +1698,7 @@ private fun ChoiceButton(
 ) {
     Button(
         onClick = onClick,
-        shape = MaterialTheme.shapes.small,
+        shape = RoundedCornerShape(28.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
             contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
