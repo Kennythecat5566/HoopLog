@@ -19,13 +19,16 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -485,7 +488,10 @@ private fun TodayScreen(
         }
         Spacer(Modifier.height(16.dp))
         if (homeMode == HomeMode.Day) {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(
+                contentPadding = PaddingValues(top = 10.dp, bottom = 128.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
                 items(visibleEntries, key = { it.id }) { entry ->
                     TrainingRow(
                         title = entry.title,
@@ -551,7 +557,10 @@ private fun WeekOverview(
     var detailDate by remember { mutableStateOf<LocalDate?>(null) }
     val dates = remember(today) { today.weekDates() }
 
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    LazyColumn(
+        contentPadding = PaddingValues(top = 10.dp, bottom = 128.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
         items(dates, key = { it.toString() }) { date ->
             val entries = weekEntries[date.toString()].orEmpty()
                 .filter { selectedTag == "全部" || it.tag == selectedTag }
@@ -671,46 +680,58 @@ private fun HistoryScreen(
     onUpdateEntryPlan: (DailyEntry, TrainingMode, Int, Int, Int, Int, Int?, List<TrainingSetPlan>?) -> Unit
 ) {
     var month by remember { mutableStateOf(YearMonth.now()) }
-    var viewMode by remember { mutableStateOf(HistoryViewMode.Calendar) }
+    var viewMode by remember { mutableStateOf(HistoryViewMode.Year) }
     var heatmapYear by remember { mutableStateOf(LocalDate.now().year) }
     var detailDate by remember { mutableStateOf<String?>(null) }
     var editingEntry by remember { mutableStateOf<DailyEntry?>(null) }
     val summaries = remember(state.summaries) { state.summaries.associateBy { it.date } }
-    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ChoiceButton("月曆", viewMode == HistoryViewMode.Calendar) { viewMode = HistoryViewMode.Calendar }
-            ChoiceButton("年度", viewMode == HistoryViewMode.Year) { viewMode = HistoryViewMode.Year }
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = {
-                if (viewMode == HistoryViewMode.Calendar) month = month.minusMonths(1) else heatmapYear -= 1
-            }) { Text("<") }
-            Text(
-                if (viewMode == HistoryViewMode.Calendar) "${month.year}-${month.monthValue.toString().padStart(2, '0')}" else heatmapYear.toString(),
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.titleLarge
-            )
-            TextButton(onClick = {
-                if (viewMode == HistoryViewMode.Calendar) month = month.plusMonths(1) else heatmapYear += 1
-            }) { Text(">") }
-        }
-        TrainingTrendChart(month, state.completedEntries, summaries)
-        if (viewMode == HistoryViewMode.Calendar) {
-            CalendarMonth(month, summaries) { date ->
-                onSelect(date)
-                detailDate = date
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
+        contentPadding = PaddingValues(top = 10.dp, bottom = 128.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ChoiceButton("月曆", viewMode == HistoryViewMode.Calendar) { viewMode = HistoryViewMode.Calendar }
+                ChoiceButton("年度", viewMode == HistoryViewMode.Year) { viewMode = HistoryViewMode.Year }
             }
-        } else {
-            ContributionHeatmap(
-                year = heatmapYear,
-                entries = state.completedEntries,
-                onSelect = { date ->
+        }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = {
+                    if (viewMode == HistoryViewMode.Calendar) month = month.minusMonths(1) else heatmapYear -= 1
+                }) { Text("<") }
+                Text(
+                    if (viewMode == HistoryViewMode.Calendar) "${month.year}-${month.monthValue.toString().padStart(2, '0')}" else heatmapYear.toString(),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleLarge
+                )
+                TextButton(onClick = {
+                    if (viewMode == HistoryViewMode.Calendar) month = month.plusMonths(1) else heatmapYear += 1
+                }) { Text(">") }
+            }
+        }
+        if (viewMode == HistoryViewMode.Calendar) {
+            item { TrainingTrendChart(month, state.completedEntries, summaries) }
+            item {
+                CalendarMonth(month, summaries) { date ->
                     onSelect(date)
                     detailDate = date
                 }
-            )
+            }
+        } else {
+            item {
+                ContributionHeatmap(
+                    year = heatmapYear,
+                    entries = state.completedEntries,
+                    onSelect = { date ->
+                        onSelect(date)
+                        detailDate = date
+                    }
+                )
+            }
+            item { AnnualDimensionChart(heatmapYear, state.completedEntries) }
         }
-        Spacer(Modifier.weight(1f))
     }
     detailDate?.let { date ->
         val summary = state.summaries.firstOrNull { it.date == date }
@@ -945,6 +966,73 @@ private fun contributionColor(level: Int): Color = when (level) {
 }
 
 @Composable
+private fun AnnualDimensionChart(
+    year: Int,
+    entries: List<DailyEntry>
+) {
+    val yearEntries = remember(year, entries) {
+        entries.filter { LocalDate.parse(it.date).year == year }
+    }
+    val trainingDays = yearEntries.map { it.date }.distinct().size
+    val completedSets = yearEntries.sumOf { it.completedSets.coerceAtLeast(if (it.completed) it.sets else 0) }
+    val plannedSets = yearEntries.sumOf { it.sets.coerceAtLeast(1) }.coerceAtLeast(1)
+    val totalMinutes = yearEntries.sumOf { entry ->
+        val activeSets = entry.completedSets.coerceAtLeast(if (entry.completed) entry.sets else 0)
+        activeSets * entry.durationSeconds / 60
+    }
+    val variety = yearEntries.map { it.itemId }.distinct().size
+    val volumeScore = (trainingDays / 180f).coerceIn(0f, 1f)
+    val durationScore = (totalMinutes / 7200f).coerceIn(0f, 1f)
+    val completionScore = (completedSets.toFloat() / plannedSets.toFloat()).coerceIn(0f, 1f)
+    val varietyScore = (variety / 8f).coerceIn(0f, 1f)
+    val primary = MaterialTheme.colorScheme.primary
+    val muted = TrainlyMuted
+    val axisColor = TrainlyPanel
+    Surface(
+        tonalElevation = 0.dp,
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth().shadow(8.dp, MaterialTheme.shapes.medium)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text("年度維度", style = MaterialTheme.typography.titleMedium)
+            Text("總訓練 $trainingDays 天 · $variety 個項目", style = MaterialTheme.typography.bodySmall, color = muted)
+            Text("時長 ${(durationScore * 100).roundToInt()}%", style = MaterialTheme.typography.bodySmall, color = muted)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("訓練量\n${(volumeScore * 100).roundToInt()}%", style = MaterialTheme.typography.bodySmall, color = muted)
+                Canvas(modifier = Modifier.size(220.dp)) {
+                    val center = Offset(size.width / 2f, size.height / 2f)
+                    val radius = size.minDimension * 0.42f
+                    drawLine(axisColor, Offset(center.x, center.y - radius), Offset(center.x, center.y + radius), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
+                    drawLine(axisColor, Offset(center.x - radius, center.y), Offset(center.x + radius, center.y), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
+                    fun mark(target: Offset, score: Float) {
+                        val point = Offset(
+                            center.x + (target.x - center.x) * score,
+                            center.y + (target.y - center.y) * score
+                        )
+                        drawLine(primary, center, point, strokeWidth = 4.dp.toPx(), cap = StrokeCap.Round)
+                        drawCircle(Color.White, radius = 6.dp.toPx(), center = point)
+                        drawCircle(primary, radius = 6.dp.toPx(), center = point, style = Stroke(width = 3.dp.toPx()))
+                    }
+                    mark(Offset(center.x, center.y - radius), durationScore)
+                    mark(Offset(center.x + radius, center.y), varietyScore)
+                    mark(Offset(center.x, center.y + radius), completionScore)
+                    mark(Offset(center.x - radius, center.y), volumeScore)
+                    drawCircle(Color.White, radius = 7.dp.toPx(), center = center)
+                    drawCircle(primary, radius = 7.dp.toPx(), center = center, style = Stroke(width = 3.dp.toPx()))
+                }
+                Text("多樣性\n${(varietyScore * 100).roundToInt()}%", style = MaterialTheme.typography.bodySmall, color = muted)
+            }
+            Text("完成率 ${(completionScore * 100).roundToInt()}%", style = MaterialTheme.typography.bodySmall, color = muted)
+        }
+    }
+}
+
+@Composable
 private fun CalendarMonth(
     month: YearMonth,
     summaries: Map<String, DaySummary>,
@@ -1014,9 +1102,13 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
         }
     }
 
-    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
+        contentPadding = PaddingValues(top = 10.dp, bottom = 128.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         item {
-            SettingsDrawerSection("訓練項目", "${vm.state.items.size} 個項目", initiallyExpanded = true) {
+            SettingsDrawerSection("訓練項目", "${vm.state.items.size} 個項目") {
                 vm.state.items.forEach { item ->
                     EditableItemRow(
                         item = item,
@@ -1199,7 +1291,7 @@ private fun SettingsDrawerSection(
                     Text(title, style = MaterialTheme.typography.titleMedium)
                     Text(subtitle, style = MaterialTheme.typography.bodySmall, color = TrainlyMuted)
                 }
-                Text(if (expanded) "收合" else "展開", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                Text(if (expanded) "-" else "+", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
             }
             if (expanded) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
@@ -1896,13 +1988,18 @@ private fun ChoiceButton(
 ) {
     Button(
         onClick = onClick,
+        modifier = Modifier.defaultMinSize(minWidth = 0.dp, minHeight = if (compact) 32.dp else 38.dp),
         shape = RoundedCornerShape(28.dp),
+        contentPadding = PaddingValues(
+            horizontal = if (compact) 10.dp else 14.dp,
+            vertical = if (compact) 4.dp else 6.dp
+        ),
         colors = ButtonDefaults.buttonColors(
             containerColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
             contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
         )
     ) {
-        Text(if (selected) "✓ $text" else text, style = if (compact) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium)
+        Text(if (selected) "✓ $text" else text, style = MaterialTheme.typography.bodySmall)
     }
 }
 
