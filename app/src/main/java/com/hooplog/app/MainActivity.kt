@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.app.Activity
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -727,14 +728,22 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
     val scope = rememberCoroutineScope()
     var googleAccount by remember { mutableStateOf(GoogleDriveSync.lastSignedInAccount(context)) }
     var syncing by remember { mutableStateOf(false) }
+    var googleStatus by remember { mutableStateOf(googleAccount?.email?.let { "已登入：$it" } ?: "尚未登入 Google") }
     val googleLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        runCatching {
-            GoogleSignIn.getSignedInAccountFromIntent(result.data).getResult(ApiException::class.java)
-        }.onSuccess { account ->
-            googleAccount = account
-            vm.showMessage("已登入 Google：${account.email.orEmpty()}")
-        }.onFailure {
-            vm.showMessage(it.message ?: "Google 登入失敗")
+        if (result.resultCode != Activity.RESULT_OK) {
+            googleStatus = "Google 登入未完成"
+            vm.showMessage(googleStatus)
+        } else {
+            runCatching {
+                GoogleSignIn.getSignedInAccountFromIntent(result.data).getResult(ApiException::class.java)
+            }.onSuccess { account ->
+                googleAccount = account
+                googleStatus = "已登入：${account.email.orEmpty()}"
+                vm.showMessage("已登入 Google：${account.email.orEmpty()}")
+            }.onFailure {
+                googleStatus = googleSignInErrorMessage(it)
+                vm.showMessage(googleStatus)
+            }
         }
     }
 
@@ -808,10 +817,11 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
         item {
             val account = googleAccount
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(account?.email?.let { "已登入：$it" } ?: "尚未登入 Google", style = MaterialTheme.typography.bodyMedium)
+                Text(googleStatus, style = MaterialTheme.typography.bodyMedium)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     item {
                         Button(enabled = !syncing, onClick = {
+                            googleStatus = "正在開啟 Google 登入..."
                             val client = GoogleSignIn.getClient(context, GoogleDriveSync.signInOptions)
                             googleLauncher.launch(client.signInIntent)
                         }) { Text(if (account == null) "登入 Google" else "切換帳號") }
@@ -820,8 +830,10 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
                         Button(enabled = account != null && !syncing, onClick = {
                             val active = googleAccount ?: return@Button
                             syncing = true
+                            googleStatus = "正在上傳到 Google..."
                             scope.launch {
                                 vm.uploadGoogleBackup(context, active)
+                                googleStatus = vm.state.message ?: "同步完成"
                                 syncing = false
                             }
                         }) { Text("上傳同步") }
@@ -830,8 +842,10 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
                         Button(enabled = account != null && !syncing, onClick = {
                             val active = googleAccount ?: return@Button
                             syncing = true
+                            googleStatus = "正在從 Google 下載..."
                             scope.launch {
                                 vm.downloadGoogleBackup(context, active)
+                                googleStatus = vm.state.message ?: "還原完成"
                                 syncing = false
                             }
                         }) { Text("下載還原") }
@@ -840,7 +854,8 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
                         TextButton(enabled = account != null && !syncing, onClick = {
                             GoogleSignIn.getClient(context, GoogleDriveSync.signInOptions).signOut()
                             googleAccount = null
-                            vm.showMessage("已登出 Google")
+                            googleStatus = "已登出 Google"
+                            vm.showMessage(googleStatus)
                         }) { Text("登出") }
                     }
                 }
@@ -1827,6 +1842,16 @@ private fun weekdayLabel(day: Int): String = when (day.coerceIn(1, 7)) {
     5 -> "週五"
     6 -> "週六"
     else -> "週日"
+}
+
+private fun googleSignInErrorMessage(error: Throwable): String {
+    val apiError = error as? ApiException
+    return when (apiError?.statusCode) {
+        10 -> "Google OAuth 尚未設定，請在 Google Cloud 建立 Android OAuth client 並填入 app 簽章 SHA-1"
+        12501 -> "Google 登入已取消"
+        12500 -> "Google 登入失敗，請確認手機有 Google Play 服務"
+        else -> error.message ?: "Google 登入失敗"
+    }
 }
 
 private fun LocalDate.weekDates(): List<LocalDate> {
