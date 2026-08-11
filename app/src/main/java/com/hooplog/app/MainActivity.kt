@@ -730,20 +730,15 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
     var syncing by remember { mutableStateOf(false) }
     var googleStatus by remember { mutableStateOf(googleAccount?.email?.let { "已登入：$it" } ?: "尚未登入 Google") }
     val googleLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode != Activity.RESULT_OK) {
-            googleStatus = "Google 登入未完成"
+        runCatching {
+            GoogleSignIn.getSignedInAccountFromIntent(result.data).getResult(ApiException::class.java)
+        }.onSuccess { account ->
+            googleAccount = account
+            googleStatus = "已登入：${account.email.orEmpty()}"
+            vm.showMessage("已登入 Google：${account.email.orEmpty()}")
+        }.onFailure {
+            googleStatus = googleSignInErrorMessage(it, result.resultCode)
             vm.showMessage(googleStatus)
-        } else {
-            runCatching {
-                GoogleSignIn.getSignedInAccountFromIntent(result.data).getResult(ApiException::class.java)
-            }.onSuccess { account ->
-                googleAccount = account
-                googleStatus = "已登入：${account.email.orEmpty()}"
-                vm.showMessage("已登入 Google：${account.email.orEmpty()}")
-            }.onFailure {
-                googleStatus = googleSignInErrorMessage(it)
-                vm.showMessage(googleStatus)
-            }
         }
     }
 
@@ -1844,13 +1839,13 @@ private fun weekdayLabel(day: Int): String = when (day.coerceIn(1, 7)) {
     else -> "週日"
 }
 
-private fun googleSignInErrorMessage(error: Throwable): String {
+private fun googleSignInErrorMessage(error: Throwable, resultCode: Int? = null): String {
     val apiError = error as? ApiException
     return when (apiError?.statusCode) {
         10 -> "Google OAuth 尚未設定，請在 Google Cloud 建立 Android OAuth client 並填入 app 簽章 SHA-1"
         12501 -> "Google 登入已取消"
         12500 -> "Google 登入失敗，請確認手機有 Google Play 服務"
-        else -> error.message ?: "Google 登入失敗"
+        else -> error.message ?: "Google 登入失敗（resultCode: ${resultCode ?: "unknown"}）"
     }
 }
 
