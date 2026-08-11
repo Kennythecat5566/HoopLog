@@ -16,6 +16,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -676,16 +677,17 @@ private fun NotionTagFilter(
                 }
             }
         }
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            item {
-                ChoiceButton(
-                    text = "全部",
-                    selected = selectedTags.isEmpty() && selectedSchedules.isEmpty(),
-                    compact = true,
-                    onClick = onClear
-                )
-            }
-            items(tags, key = { it.name }) { tag ->
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            ChoiceButton(
+                text = "全部",
+                selected = selectedTags.isEmpty() && selectedSchedules.isEmpty(),
+                compact = true,
+                onClick = onClear
+            )
+            tags.forEach { tag ->
                 NotionTagChip(
                     tag = tag,
                     selected = tag.name in selectedTags,
@@ -693,8 +695,11 @@ private fun NotionTagFilter(
                 )
             }
         }
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(TagSchedule.entries.toList(), key = { it.name }) { schedule ->
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            TagSchedule.entries.forEach { schedule ->
                 ChoiceButton(
                     text = schedule.label(),
                     selected = schedule in selectedSchedules,
