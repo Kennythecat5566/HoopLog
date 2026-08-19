@@ -77,6 +77,15 @@ data class DaySession(
     val durationSeconds: Int
 )
 
+data class TrainingLocation(
+    val id: Long,
+    val name: String,
+    val latitude: Double,
+    val longitude: Double,
+    val radiusMeters: Int,
+    val active: Boolean = true
+)
+
 data class UpdateSettings(
     val owner: String = "",
     val repo: String = ""

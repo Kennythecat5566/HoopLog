@@ -1,7 +1,12 @@
 package com.hooplog.app
 
+import android.Manifest
 import android.app.Application
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -93,6 +98,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.android.gms.auth.api.signin.GoogleSignIn
@@ -130,6 +136,7 @@ data class UiState(
     val historyEntries: List<DailyEntry> = emptyList(),
     val completedEntries: List<DailyEntry> = emptyList(),
     val tags: List<TrainingTag> = emptyList(),
+    val locations: List<TrainingLocation> = emptyList(),
     val uiSettings: UiSettings = UiSettings(),
     val updateSettings: UpdateSettings = UpdateSettings(),
     val updateInfo: UpdateInfo? = null,
@@ -168,6 +175,7 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
             historyEntries = selected?.let { trainingStore.historyEntriesFor(it) } ?: emptyList(),
             completedEntries = trainingStore.completedEntries(),
             tags = trainingStore.tags(),
+            locations = trainingStore.locations(),
             uiSettings = settingsStore.loadUiSettings(),
             updateSettings = settingsStore.loadUpdateSettings()
         )
@@ -223,6 +231,16 @@ class HoopLogViewModel(application: Application) : AndroidViewModel(application)
 
     fun deleteTag(name: String) {
         trainingStore.deleteTag(name)
+        reload()
+    }
+
+    fun saveLocation(location: TrainingLocation) {
+        trainingStore.saveLocation(location)
+        reload()
+    }
+
+    fun deleteLocation(id: Long) {
+        trainingStore.deleteLocation(id)
         reload()
     }
 
@@ -1279,15 +1297,18 @@ private fun CalendarMonth(
 
 @Composable
 private fun SettingsScreen(vm: HoopLogViewModel) {
+    val context = LocalContext.current
     var editItem by remember { mutableStateOf<TrainingItem?>(null) }
     var showDialog by remember { mutableStateOf(false) }
     var editTag by remember { mutableStateOf<TrainingTag?>(null) }
     var showTagDialog by remember { mutableStateOf(false) }
     var showAdvancedDialog by remember { mutableStateOf(false) }
+    var editLocation by remember { mutableStateOf<TrainingLocation?>(null) }
+    var showLocationDialog by remember { mutableStateOf(false) }
+    var gpsEnabled by remember { mutableStateOf(LocationTrainingService.isEnabled(context)) }
     var owner by remember(vm.state.updateSettings) { mutableStateOf(vm.state.updateSettings.owner) }
     var repo by remember(vm.state.updateSettings) { mutableStateOf(vm.state.updateSettings.repo) }
     var checking by remember { mutableStateOf(false) }
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var googleAccount by remember { mutableStateOf(GoogleDriveSync.lastSignedInAccount(context)) }
     var syncing by remember { mutableStateOf(false) }
@@ -1302,6 +1323,17 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
         }.onFailure {
             googleStatus = googleSignInErrorMessage(it, result.resultCode)
             vm.showMessage(googleStatus)
+        }
+    }
+    val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+        val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (granted) {
+            LocationTrainingService.start(context)
+            gpsEnabled = true
+            vm.showMessage("GPS 訓練偵測已啟用")
+        } else {
+            vm.showMessage("需要定位權限才能自動偵測訓練地點")
         }
     }
 
@@ -1382,6 +1414,27 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
             }
         }
         item {
+            GpsTrainingLocationsSection(
+                locations = vm.state.locations,
+                gpsEnabled = gpsEnabled,
+                onRequestPermission = {
+                    locationPermissionLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.ACCESS_FINE_LOCATION,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                        )
+                    )
+                },
+                onGpsEnabledChange = { gpsEnabled = it },
+                onEdit = {
+                    editLocation = it
+                    showLocationDialog = true
+                },
+                onDelete = { vm.deleteLocation(it) },
+                onMessage = { vm.showMessage(it) }
+            )
+        }
+        item {
             val account = googleAccount
             SettingsDrawerSection("Google 同步", googleStatus) {
                 Text(googleStatus, style = MaterialTheme.typography.bodyMedium)
@@ -1459,6 +1512,16 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
             }
         )
     }
+    if (showLocationDialog) {
+        LocationDialog(
+            location = editLocation,
+            onDismiss = { showLocationDialog = false },
+            onSave = {
+                vm.saveLocation(it)
+                showLocationDialog = false
+            }
+        )
+    }
     if (showAdvancedDialog) {
         AdvancedSettingsDialog(
             settings = vm.state.uiSettings,
@@ -1469,6 +1532,192 @@ private fun SettingsScreen(vm: HoopLogViewModel) {
             }
         )
     }
+}
+
+@Composable
+private fun GpsTrainingLocationsSection(
+    locations: List<TrainingLocation>,
+    gpsEnabled: Boolean,
+    onRequestPermission: () -> Unit,
+    onGpsEnabledChange: (Boolean) -> Unit,
+    onEdit: (TrainingLocation?) -> Unit,
+    onDelete: (Long) -> Unit,
+    onMessage: (String) -> Unit
+) {
+    val context = LocalContext.current
+    SettingsDrawerSection(
+        title = "GPS 訓練地點",
+        subtitle = if (gpsEnabled) "${locations.count { it.active }} 個地點 · 偵測中" else "${locations.size} 個地點 · 未啟用"
+    ) {
+        Text("進入範圍會開始訓練計時，離開範圍會結束並累計時長。", style = MaterialTheme.typography.bodySmall, color = TrainlyMuted)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                Button(onClick = {
+                    if (LocationTrainingService.hasLocationPermission(context)) {
+                        LocationTrainingService.start(context)
+                        onGpsEnabledChange(true)
+                        onMessage("GPS 訓練偵測已啟用")
+                    } else {
+                        onRequestPermission()
+                    }
+                }) { Text(if (gpsEnabled) "重新啟用" else "啟用偵測") }
+            }
+            item {
+                Button(enabled = gpsEnabled, onClick = {
+                    LocationTrainingService.stop(context)
+                    onGpsEnabledChange(false)
+                    onMessage("GPS 訓練偵測已停止")
+                }) { Text("停止偵測") }
+            }
+            item {
+                Button(onClick = {
+                    if (!LocationTrainingService.hasLocationPermission(context)) {
+                        onRequestPermission()
+                    } else {
+                        val current = currentLocationOrNull(context)
+                        if (current == null) {
+                            onMessage("尚未取得目前位置，請開啟定位後稍等再試")
+                        } else {
+                            onEdit(
+                                TrainingLocation(
+                                    id = 0L,
+                                    name = "Training spot",
+                                    latitude = current.latitude,
+                                    longitude = current.longitude,
+                                    radiusMeters = 120,
+                                    active = true
+                                )
+                            )
+                        }
+                    }
+                }) { Text("目前位置新增") }
+            }
+            item {
+                Button(onClick = { onEdit(null) }) { Text("手動新增") }
+            }
+        }
+        if (locations.isEmpty()) {
+            Text("尚未新增地點", style = MaterialTheme.typography.bodyMedium, color = TrainlyMuted)
+        }
+        locations.forEach { location ->
+            EditableLocationRow(
+                location = location,
+                onEdit = { onEdit(location) },
+                onDelete = { onDelete(location.id) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun EditableLocationRow(
+    location: TrainingLocation,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Surface(
+        color = if (location.active) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant,
+        shape = MaterialTheme.shapes.medium,
+        tonalElevation = 0.dp,
+        modifier = Modifier.fillMaxWidth().shadow(8.dp, MaterialTheme.shapes.medium)
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(location.name, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "${location.radiusMeters} m · ${"%.5f".format(location.latitude)}, ${"%.5f".format(location.longitude)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TrainlyMuted
+                )
+            }
+            IconButton(onClick = onEdit) {
+                Icon(Icons.Outlined.Edit, contentDescription = "Edit")
+            }
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Outlined.Delete, contentDescription = "Delete")
+            }
+        }
+    }
+}
+
+@Composable
+private fun LocationDialog(
+    location: TrainingLocation?,
+    onDismiss: () -> Unit,
+    onSave: (TrainingLocation) -> Unit
+) {
+    var name by remember(location) { mutableStateOf(location?.name ?: "Training spot") }
+    var latitude by remember(location) { mutableStateOf(location?.latitude?.toString() ?: "") }
+    var longitude by remember(location) { mutableStateOf(location?.longitude?.toString() ?: "") }
+    var radius by remember(location) { mutableStateOf((location?.radiusMeters ?: 120).toString()) }
+    var active by remember(location) { mutableStateOf(location?.active ?: true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (location == null || location.id <= 0L) "新增 GPS 地點" else "修改 GPS 地點") },
+        text = {
+            ScrollableDialogContent {
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                OutlinedTextField(name, { name = it }, label = { Text("地點名稱") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(
+                    latitude,
+                    { latitude = it.filter { char -> char.isDigit() || char == '.' || char == '-' }.take(14) },
+                    label = { Text("Latitude") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    longitude,
+                    { longitude = it.filter { char -> char.isDigit() || char == '.' || char == '-' }.take(14) },
+                    label = { Text("Longitude") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    radius,
+                    { radius = it.filter(Char::isDigit).take(4) },
+                    label = { Text("半徑 m") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = active, onCheckedChange = { active = it })
+                    Text("啟用這個地點")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val lat = latitude.toDoubleOrNull()
+                val lon = longitude.toDoubleOrNull()
+                val meters = radius.toIntOrNull()
+                if (lat == null || lon == null || meters == null) {
+                    error = "請輸入有效座標與半徑"
+                    return@TextButton
+                }
+                if (lat !in -90.0..90.0 || lon !in -180.0..180.0) {
+                    error = "座標超出範圍"
+                    return@TextButton
+                }
+                onSave(
+                    TrainingLocation(
+                        id = location?.id ?: 0L,
+                        name = name.trim().ifBlank { "Training spot" },
+                        latitude = lat,
+                        longitude = lon,
+                        radiusMeters = meters.coerceIn(20, 5000),
+                        active = active
+                    )
+                )
+            }) { Text("儲存") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
 }
 
 @Composable
@@ -2377,6 +2626,25 @@ private fun formatDuration(seconds: Int): String {
     val minutes = safeSeconds / 60
     val remainder = safeSeconds % 60
     return "%02d:%02d".format(minutes, remainder)
+}
+
+private fun currentLocationOrNull(context: Context): Location? {
+    if (!LocationTrainingService.hasLocationPermission(context)) return null
+    val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    val providers = listOf(
+        LocationManager.GPS_PROVIDER,
+        LocationManager.NETWORK_PROVIDER,
+        LocationManager.PASSIVE_PROVIDER
+    )
+    return providers.mapNotNull { provider ->
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED
+        ) {
+            null
+        } else {
+            runCatching { manager.getLastKnownLocation(provider) }.getOrNull()
+        }
+    }.maxByOrNull { it.time }
 }
 
 private val cardColorChoices = listOf(

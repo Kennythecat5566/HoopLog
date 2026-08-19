@@ -8,7 +8,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDate
 
-class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", null, 8) {
+class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", null, 9) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -76,6 +76,7 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
             )
             """.trimIndent()
         )
+        createTrainingLocationsTable(db)
         seedTags(db)
     }
 
@@ -146,6 +147,24 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                 """.trimIndent()
             )
         }
+        if (oldVersion < 9) {
+            createTrainingLocationsTable(db)
+        }
+    }
+
+    private fun createTrainingLocationsTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS training_locations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                radius_meters INTEGER NOT NULL DEFAULT 120,
+                active INTEGER NOT NULL DEFAULT 1
+            )
+            """.trimIndent()
+        )
     }
 
     fun activeItems(): List<TrainingItem> = readableDatabase.query(
@@ -224,6 +243,50 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
         writableDatabase.update("items", ContentValues().apply { put("tag", "手動訓練") }, "tag = ?", arrayOf(name))
         writableDatabase.update("daily_entries", ContentValues().apply { put("tag", "手動訓練") }, "tag = ?", arrayOf(name))
         writableDatabase.delete("tags", "name = ?", arrayOf(name))
+    }
+
+    fun locations(): List<TrainingLocation> = readableDatabase.query(
+        "training_locations",
+        arrayOf("id", "name", "latitude", "longitude", "radius_meters", "active"),
+        null,
+        null,
+        null,
+        null,
+        "active DESC, name ASC"
+    ).use { cursor ->
+        buildList {
+            while (cursor.moveToNext()) {
+                add(
+                    TrainingLocation(
+                        id = cursor.getLong(0),
+                        name = cursor.getString(1),
+                        latitude = cursor.getDouble(2),
+                        longitude = cursor.getDouble(3),
+                        radiusMeters = cursor.getInt(4).coerceAtLeast(20),
+                        active = cursor.getInt(5) == 1
+                    )
+                )
+            }
+        }
+    }
+
+    fun saveLocation(location: TrainingLocation) {
+        val values = ContentValues().apply {
+            put("name", location.name.trim().ifBlank { "Training spot" })
+            put("latitude", location.latitude.coerceIn(-90.0, 90.0))
+            put("longitude", location.longitude.coerceIn(-180.0, 180.0))
+            put("radius_meters", location.radiusMeters.coerceIn(20, 5000))
+            put("active", if (location.active) 1 else 0)
+        }
+        if (location.id <= 0L) {
+            writableDatabase.insert("training_locations", null, values)
+        } else {
+            writableDatabase.update("training_locations", values, "id = ?", arrayOf(location.id.toString()))
+        }
+    }
+
+    fun deleteLocation(id: Long) {
+        writableDatabase.delete("training_locations", "id = ?", arrayOf(id.toString()))
     }
 
     fun saveItem(id: Long?, title: String, tag: String, colorHex: String, priority: Int, mode: TrainingMode, durationSeconds: Int, repsPerSet: Int, sets: Int, restSeconds: Int, comment: String, videoUrl: String, date: String = LocalDate.now().toString()) {
@@ -407,6 +470,7 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
             .put("items", exportTable("items", itemColumns))
             .put("daily_entries", exportTable("daily_entries", dailyEntryColumns))
             .put("day_sessions", exportTable("day_sessions", daySessionColumns))
+            .put("training_locations", exportTable("training_locations", trainingLocationColumns))
         return root.toString()
     }
 
@@ -419,10 +483,12 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
             db.delete("daily_entries", null, null)
             db.delete("items", null, null)
             db.delete("tags", null, null)
+            db.delete("training_locations", null, null)
             importTable(db, "tags", tagColumns, root.optJSONArray("tags") ?: JSONArray())
             importTable(db, "items", itemColumns, root.optJSONArray("items") ?: JSONArray())
             importTable(db, "daily_entries", dailyEntryColumns, root.optJSONArray("daily_entries") ?: JSONArray())
             importTable(db, "day_sessions", daySessionColumns, root.optJSONArray("day_sessions") ?: JSONArray())
+            importTable(db, "training_locations", trainingLocationColumns, root.optJSONArray("training_locations") ?: JSONArray())
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -459,8 +525,9 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
                         putNull(column)
                     } else {
                         when (column) {
-                            "id", "item_id", "priority", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "completed_sets", "completed", "weekly_day", "active", "sort_order" -> put(column, row.optLong(column))
+                            "id", "item_id", "priority", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "completed_sets", "completed", "weekly_day", "active", "sort_order", "radius_meters" -> put(column, row.optLong(column))
                             "started_at", "ended_at", "completed_at" -> put(column, row.optLong(column))
+                            "latitude", "longitude" -> put(column, row.optDouble(column))
                             else -> put(column, row.optString(column))
                         }
                     }
@@ -499,12 +566,32 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
     }
 
     fun startSession(date: String = LocalDate.now().toString()) {
-        writableDatabase.insertWithOnConflict("day_sessions", null, ContentValues().apply {
-            put("date", date)
-            put("started_at", System.currentTimeMillis())
-            putNull("ended_at")
-            put("duration_seconds", 0)
-        }, SQLiteDatabase.CONFLICT_IGNORE)
+        val now = System.currentTimeMillis()
+        val session = sessionFor(date)
+        if (session.startedAt == null) {
+            writableDatabase.insertWithOnConflict("day_sessions", null, ContentValues().apply {
+                put("date", date)
+                put("started_at", now)
+                putNull("ended_at")
+                put("duration_seconds", session.durationSeconds)
+            }, SQLiteDatabase.CONFLICT_REPLACE)
+        } else if (session.endedAt != null) {
+            writableDatabase.update("day_sessions", ContentValues().apply {
+                put("started_at", now)
+                putNull("ended_at")
+            }, "date = ?", arrayOf(date))
+        }
+    }
+
+    fun endSession(date: String = LocalDate.now().toString()) {
+        val session = sessionFor(date)
+        if (session.startedAt == null || session.endedAt != null) return
+        val ended = System.currentTimeMillis()
+        val elapsed = ((ended - session.startedAt) / 1000L).toInt().coerceAtLeast(0)
+        writableDatabase.update("day_sessions", ContentValues().apply {
+            put("ended_at", ended)
+            put("duration_seconds", session.durationSeconds + elapsed)
+        }, "date = ?", arrayOf(date))
     }
 
     fun updateEntryPlan(
@@ -578,7 +665,7 @@ class TrainingStore(context: Context) : SQLiteOpenHelper(context, "hooplog.db", 
         val ended = System.currentTimeMillis()
         writableDatabase.update("day_sessions", ContentValues().apply {
             put("ended_at", ended)
-            put("duration_seconds", ((ended - session.startedAt) / 1000L).toInt().coerceAtLeast(0))
+            put("duration_seconds", session.durationSeconds + ((ended - session.startedAt) / 1000L).toInt().coerceAtLeast(0))
         }, "date = ?", arrayOf(date))
     }
 
@@ -622,6 +709,7 @@ private val tagColumns = arrayOf("name", "color_hex", "priority", "schedule", "w
 private val itemColumns = arrayOf("id", "title", "tag", "color_hex", "priority", "mode", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "comment", "video_url", "active", "sort_order")
 private val dailyEntryColumns = arrayOf("id", "date", "item_id", "title", "tag", "color_hex", "priority", "mode", "duration_seconds", "reps_per_set", "sets", "rest_seconds", "completed_sets", "set_plans", "comment", "video_url", "completed", "completed_at")
 private val daySessionColumns = arrayOf("date", "started_at", "ended_at", "duration_seconds")
+private val trainingLocationColumns = arrayOf("id", "name", "latitude", "longitude", "radius_meters", "active")
 
 private val TrainingMode.dbValue: String
     get() = when (this) {
