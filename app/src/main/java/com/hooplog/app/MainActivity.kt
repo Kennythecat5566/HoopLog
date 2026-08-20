@@ -10,8 +10,13 @@ import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -98,6 +103,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -106,6 +112,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.common.api.ApiException
 import java.time.LocalDate
 import java.time.YearMonth
+import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -1646,12 +1653,17 @@ private fun LocationDialog(
     onDismiss: () -> Unit,
     onSave: (TrainingLocation) -> Unit
 ) {
+    val context = LocalContext.current
     var name by remember(location) { mutableStateOf(location?.name ?: "Training spot") }
     var latitude by remember(location) { mutableStateOf(location?.latitude?.toString() ?: "") }
     var longitude by remember(location) { mutableStateOf(location?.longitude?.toString() ?: "") }
     var radius by remember(location) { mutableStateOf((location?.radiusMeters ?: 120).toString()) }
     var active by remember(location) { mutableStateOf(location?.active ?: true) }
     var error by remember { mutableStateOf<String?>(null) }
+    var showMapPicker by remember { mutableStateOf(false) }
+    val current = remember(showMapPicker) { currentLocationOrNull(context) }
+    val mapLatitude = latitude.toDoubleOrNull() ?: current?.latitude ?: 25.033964
+    val mapLongitude = longitude.toDoubleOrNull() ?: current?.longitude ?: 121.564468
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (location == null || location.id <= 0L) "新增 GPS 地點" else "修改 GPS 地點") },
@@ -1675,6 +1687,9 @@ private fun LocationDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth()
                 )
+                Button(onClick = { showMapPicker = true }) {
+                    Text("在地圖選擇")
+                }
                 OutlinedTextField(
                     radius,
                     { radius = it.filter(Char::isDigit).take(4) },
@@ -1718,6 +1733,120 @@ private fun LocationDialog(
             TextButton(onClick = onDismiss) { Text("取消") }
         }
     )
+    if (showMapPicker) {
+        MapPickerDialog(
+            initialLatitude = mapLatitude,
+            initialLongitude = mapLongitude,
+            onDismiss = { showMapPicker = false },
+            onPick = { lat, lon ->
+                latitude = String.format(Locale.US, "%.6f", lat)
+                longitude = String.format(Locale.US, "%.6f", lon)
+                showMapPicker = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun MapPickerDialog(
+    initialLatitude: Double,
+    initialLongitude: Double,
+    onDismiss: () -> Unit,
+    onPick: (Double, Double) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("選擇訓練地點") },
+        text = {
+            AndroidView(
+                modifier = Modifier.fillMaxWidth().height(460.dp),
+                factory = { context ->
+                    WebView(context).apply {
+                        webViewClient = WebViewClient()
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
+                        addJavascriptInterface(MapPickerBridge(onPick), "TrainlyPicker")
+                        loadDataWithBaseURL(
+                            "https://www.openstreetmap.org/",
+                            mapPickerHtml(initialLatitude, initialLongitude),
+                            "text/html",
+                            "UTF-8",
+                            null
+                        )
+                    }
+                },
+                update = { webView ->
+                    webView.loadDataWithBaseURL(
+                        "https://www.openstreetmap.org/",
+                        mapPickerHtml(initialLatitude, initialLongitude),
+                        "text/html",
+                        "UTF-8",
+                        null
+                    )
+                }
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("關閉") }
+        }
+    )
+}
+
+private class MapPickerBridge(
+    private val onPick: (Double, Double) -> Unit
+) {
+    private val handler = Handler(Looper.getMainLooper())
+
+    @JavascriptInterface
+    fun pick(latitude: Double, longitude: Double) {
+        handler.post { onPick(latitude, longitude) }
+    }
+}
+
+private fun mapPickerHtml(latitude: Double, longitude: Double): String {
+    val lat = String.format(Locale.US, "%.8f", latitude.coerceIn(-90.0, 90.0))
+    val lon = String.format(Locale.US, "%.8f", longitude.coerceIn(-180.0, 180.0))
+    return """
+        <!doctype html>
+        <html>
+        <head>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+          <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+          <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+          <style>
+            html, body, #map { width: 100%; height: 100%; margin: 0; padding: 0; background: #E9F3F8; }
+            .hint {
+              position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 999;
+              padding: 10px 12px; border-radius: 18px; background: rgba(255,255,255,.92);
+              color: #2B3748; font-family: sans-serif; font-size: 14px; box-shadow: 0 8px 24px rgba(43,55,72,.18);
+            }
+          </style>
+        </head>
+        <body>
+          <div id="map"></div>
+          <div class="hint">點一下地圖即可選擇位置</div>
+          <script>
+            const start = [$lat, $lon];
+            const map = L.map('map', { zoomControl: true }).setView(start, 17);
+            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+              maxZoom: 19,
+              attribution: '&copy; OpenStreetMap'
+            }).addTo(map);
+            let marker = L.marker(start, { draggable: true }).addTo(map);
+            function submit(latlng) {
+              marker.setLatLng(latlng);
+              if (window.TrainlyPicker) {
+                window.TrainlyPicker.pick(latlng.lat, latlng.lng);
+              }
+            }
+            map.on('click', event => submit(event.latlng));
+            marker.on('dragend', event => submit(event.target.getLatLng()));
+            setTimeout(() => map.invalidateSize(), 300);
+          </script>
+        </body>
+        </html>
+    """.trimIndent()
 }
 
 @Composable
